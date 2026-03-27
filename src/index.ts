@@ -100,7 +100,11 @@ class VigorFetch<T = any> {
                 });
             }
 
-            const urlObj = new URL(path.replace(/^\//, ""), this._origin + "/");
+            const originBase = this._origin.endsWith('/') ? this._origin : this._origin + '/';
+            const cleanPath = path.replace(/^\//, "");
+            const urlObj = cleanPath 
+                ? new URL(cleanPath, originBase) 
+                : new URL(this._origin);
             Object.entries(query).forEach(([key, value]) => {
                 if (value !== null && value !== undefined) urlObj.searchParams.append(key, String(value));
             });

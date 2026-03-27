@@ -46,6 +46,7 @@ npm install vigor-fetch
 | :--- | :--- | :--- | :--- |
 | .path(arg) | string | "" | Sets the endpoint path to be appended to the origin. |
 | .query(arg) | Record<string, any> | {} | Appends key-value pairs as query parameters to the URL. |
+| .method(arg) | string | "POST" | "GET" (depends on body) | Sets the HTTP request method. |
 | .headers(arg) | Record<string, string> | {} | Sets the HTTP request headers. |
 | .body(arg) | any | null | Sets the request body |
 | .offset(arg) | RequestInit | {} | Provides raw fetch options to be merged into the request. |
