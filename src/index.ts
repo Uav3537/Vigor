@@ -85,8 +85,14 @@ class VigorRetry<T = any> {
         return new (this.constructor as any)(this._target, this._args, {
             ...this._config,
             ...changes,
-            retry: { ...this._config.retry, ...(changes.retry || {}) },
-            interceptors: { ...this._config.interceptors, ...(changes.interceptors || {}) }
+            retry: { 
+                ...this._config.retry, 
+                ...(changes.retry || {}) 
+            },
+            interceptors: { 
+                ...this._config.interceptors, 
+                ...(changes.interceptors || {}) 
+            }
         });
     }
 
@@ -180,8 +186,14 @@ class VigorParse<T = any> {
         return new (this.constructor as any)(this._response, {
             ...this._config,
             ...changes,
-            settings: { ...this._config.settings, ...(changes.settings || {}) },
-            interceptors: { ...this._config.interceptors, ...(changes.interceptors || {}) }
+            settings: { 
+                ...this._config.settings, 
+                ...(changes.settings || {}) 
+            },
+            interceptors: { 
+                ...this._config.interceptors, 
+                ...(changes.interceptors || {}) 
+            }
         });
     }
 
@@ -265,7 +277,11 @@ class VigorFetch<T = any> {
             ...changes,
             request: { ...this._config.request, ...(changes.request || {}) },
             retry: { ...this._config.retry, ...(changes.retry || {}) },
-            interceptors: { ...this._config.interceptors, ...(changes.interceptors || {}) }
+            response: { ...this._config.response, ...(changes.response || {}) },
+            interceptors: { 
+                ...this._config.interceptors, 
+                ...(changes.interceptors || {}) 
+            }
         });
     }
 
@@ -412,9 +428,18 @@ class VigorAll<T = any> {
         return new (this.constructor as any)({
             ...this._config,
             ...changes,
-            settings: { ...this._config.settings, ...(changes.settings || {}) },
-            request: { ...this._config.request, ...(changes.request || {}) },
-            interceptors: { ...this._config.interceptors, ...(changes.interceptors || {}) }
+            settings: { 
+                ...this._config.settings, 
+                ...(changes.settings || {}) 
+            },
+            request: { 
+                ...this._config.request, 
+                ...(changes.request || {}) 
+            },
+            interceptors: { 
+                ...this._config.interceptors, 
+                ...(changes.interceptors || {}) 
+            }
         });
     }
 
