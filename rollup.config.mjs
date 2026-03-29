@@ -10,8 +10,8 @@ export default [
       {
         file: 'dist/index.js',
         format: 'cjs',
-        exports: 'default',
-        sourcemap: false
+        exports: 'named',
+        sourcemap: false,
       },
       {
         file: 'dist/index.mjs',
@@ -25,6 +25,7 @@ export default [
       typescript({ tsconfig: './tsconfig.json' })
     ]
   },
+  // dts 설정은 그대로 유지
   {
     input: 'src/index.ts',
     output: [{ file: 'dist/index.d.ts', format: 'esm' }],

@@ -1,77 +1,122 @@
 interface VigorErrorOptions {
-    url?: string | null;
-    status?: number;
-    message?: string;
+    type?: string;
     data?: any;
+    status?: number;
+    response?: any;
+    message?: string;
+    origin?: string;
 }
-interface VigorFetchConfig {
-    path: string;
-    method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | null;
-    offset: RequestInit;
-    headers: Record<string, string>;
-    body: any;
-    count: number;
-    max: number;
-    wait: number;
-    backoff: number;
-    unretry: Set<number>;
-    retryHeader: string[];
-    original: boolean;
-    parse: keyof Response | null;
-    beforeRequest: Array<(opt: RequestInit) => Promise<Partial<RequestInit> | void> | Partial<RequestInit> | void>;
-    afterRequest: Array<(res: Response) => Promise<Response | void> | Response | void>;
-    beforeResponse: Array<(res: Response) => Promise<Response> | Response>;
-    afterResponse: Array<(data: any) => Promise<any> | any>;
-    onError: Array<(err: any) => Promise<any> | any>;
-    query: Record<string, any>;
-    jitter: number;
+declare class VigorError extends Error {
+    data?: any;
+    type?: string;
+    status?: number;
+    response?: any;
+    origin?: string;
+    constructor(text: string, options: VigorErrorOptions);
 }
-declare class VigorFetch<T = any> {
-    private _origin;
+declare class VigorRetryError extends VigorError {
+    constructor(text: string, options: VigorErrorOptions);
+}
+declare class VigorParseError extends VigorError {
+    constructor(text: string, options: VigorErrorOptions);
+}
+declare class VigorFetchError extends VigorError {
+    constructor(text: string, options: VigorErrorOptions);
+}
+declare class VigorAllError extends VigorError {
+    constructor(text: string, options: VigorErrorOptions);
+}
+/**
+ * VigorRetry
+ */
+declare class VigorRetry<T = any> {
+    private _target;
+    private _args;
     private _config;
-    constructor(origin: string, config?: VigorFetchConfig);
+    constructor(target: (...args: any[]) => Promise<T> | T, args?: any[], config?: any);
     private _next;
-    path(arg: string): VigorFetch<T>;
-    method(arg: VigorFetchConfig['method']): VigorFetch<T>;
-    offset(arg: RequestInit): VigorFetch<T>;
-    headers(arg: Record<string, string>): VigorFetch<T>;
-    body(arg: any): VigorFetch<T>;
-    count(arg: number): VigorFetch<T>;
-    max(arg: number): VigorFetch<T>;
-    wait(arg: number): VigorFetch<T>;
-    backoff(arg: number): VigorFetch<T>;
-    unretry(arg: number[]): VigorFetch<T>;
-    retryHeader(...arg: string[]): VigorFetch<T>;
-    original(arg: boolean): VigorFetch<T>;
-    parse(arg: keyof Response): VigorFetch<T>;
-    query(arg: Record<string, any>): VigorFetch<T>;
-    jitter(arg: number): VigorFetch<T>;
-    beforeRequest(...arg: VigorFetchConfig['beforeRequest']): VigorFetch<T>;
-    afterRequest(...arg: VigorFetchConfig['afterRequest']): VigorFetch<T>;
-    beforeResponse(...arg: VigorFetchConfig['beforeResponse']): VigorFetch<T>;
-    afterResponse(...arg: VigorFetchConfig['afterResponse']): VigorFetch<T>;
-    onError(...arg: VigorFetchConfig['onError']): VigorFetch<T>;
+    args(...args: any[]): any;
+    count(int: number): VigorRetry<T>;
+    max(ms: number): VigorRetry<T>;
+    backoff(ms: number): VigorRetry<T>;
+    baseDelay(ms: number): VigorRetry<T>;
+    jitter(ms: number): VigorRetry<T>;
+    before(...func: Function[]): VigorRetry<T>;
+    onRetry(...func: Function[]): VigorRetry<T>;
+    after(...func: Function[]): VigorRetry<T>;
+    onError(...func: Function[]): VigorRetry<T>;
     request(): Promise<T>;
 }
-interface VigorAllConfig {
-    limit: number;
-    jitter: number;
-    promises: Array<() => Promise<any>>;
-}
-declare class VigorAll {
+/**
+ * VigorParse
+ */
+declare class VigorParse<T = any> {
+    private _response;
     private _config;
-    constructor(config?: VigorAllConfig);
+    constructor(response: Response | null, config?: any);
     private _next;
-    limit(arg: number): VigorAll;
-    jitter(arg: number): VigorAll;
-    promises(...args: Array<() => Promise<any>>): VigorAll;
+    original(bool: boolean): VigorParse<T>;
+    type(str: string): VigorParse<T>;
+    before(...func: Function[]): VigorParse<T>;
+    after(...func: Function[]): VigorParse<T>;
+    onError(...func: Function[]): VigorParse<T>;
+    request(): Promise<T>;
+}
+/**
+ * VigorFetch
+ */
+declare class VigorFetch<T = any> {
+    private _config;
+    constructor(origin?: string, config?: any);
+    private _next;
+    origin(str: string): VigorFetch<T>;
+    path(str: string): VigorFetch<T>;
+    query(obj: object): VigorFetch<T>;
+    method(str: string): VigorFetch<T>;
+    headers(obj: object): VigorFetch<T>;
+    body(obj: any): VigorFetch<T>;
+    offset(obj: object): VigorFetch<T>;
+    maxDelay(ms: number): VigorFetch<T>;
+    retryHeaders(...str: string[]): VigorFetch<T>;
+    unretry(...int: number[]): VigorFetch<T>;
+    before(...func: Function[]): VigorFetch<T>;
+    after(...func: Function[]): VigorFetch<T>;
+    result(...func: Function[]): VigorFetch<T>;
+    onError(...func: Function[]): VigorFetch<T>;
+    retryConfig(func: (r: VigorRetry) => VigorRetry): VigorFetch<T>;
+    parseConfig(func: (p: VigorParse) => VigorParse): VigorFetch<T>;
+    request(): Promise<T>;
+}
+/**
+ * VigorAll
+ */
+declare class VigorAll<T = any> {
+    private _config;
+    constructor(config: any);
+    private _next;
+    promises(...func: (() => Promise<any>)[]): VigorAll<T>;
+    limit(int: number): VigorAll<T>;
+    jitter(ms: number): VigorAll<T>;
+    before(...func: Function[]): VigorAll<T>;
+    after(...func: Function[]): VigorAll<T>;
+    onError(...func: Function[]): VigorAll<T>;
     request(): Promise<any[]>;
 }
+/**
+ * Main Vigor Class
+ */
 declare class Vigor {
-    fetch<T = any>(origin: string, config?: VigorFetchConfig): VigorFetch<T>;
-    all(config?: VigorAllConfig): VigorAll;
+    _Fetch: typeof VigorFetch;
+    _Retry: typeof VigorRetry;
+    _Parse: typeof VigorParse;
+    _All: typeof VigorAll;
+    use(plugin: (instance: Vigor, options?: any) => void, options?: any): this;
+    fetch<T = any>(origin?: string, config?: any): VigorFetch<T>;
+    retry<T = any>(target: (...args: any[]) => Promise<T> | T, args?: any[], config?: any): VigorRetry<T>;
+    parse<T = any>(response: Response | null, config?: any): VigorParse<T>;
+    all<T = any>(config?: any): VigorAll<T>;
 }
 declare const vigor: Vigor;
 
-export { vigor as default };
-export type { VigorAllConfig, VigorErrorOptions, VigorFetchConfig };
+export { VigorAll, VigorAllError, VigorError, VigorFetch, VigorFetchError, VigorParse, VigorParseError, VigorRetry, VigorRetryError, vigor as default, vigor };
+export type { VigorErrorOptions };
