@@ -258,15 +258,24 @@ class VigorFetch<T = any> {
         this._config = {
             request: {
                 origin, path: "", query: {},
-                method: "", headers: {}, body: null, offset: {}
+                method: "", headers: {}, body: null, offset: {},
+                ...(config.request || {})
             },
             retry: {
                 limit: 10000,
-                retryHeaders: ["retry-after", "ratelimit-reset", "x-ratelimit-reset", "x-retry-after", "x-amz-retry-after", "chrome-proxy-next-link"] as const,
+                retryHeaders: ["retry-after", "ratelimit-reset", "x-ratelimit-reset", "x-retry-after", "x-amz-retry-after", "chrome-proxy-next-link"],
                 unretry: new Set([400, 401, 403, 404, 406, 409, 410, 411, 413, 414, 415, 422]),
+                ...(config.retry || {})
             },
-            response: { retryConfig: undefined, parseConfig: undefined },
-            interceptors: { before: [], after: [], onError: [], result: [] },
+            response: { 
+                retryConfig: undefined, 
+                parseConfig: undefined,
+                ...(config.response || {})
+            },
+            interceptors: { 
+                before: [], after: [], onError: [], result: [],
+                ...(config.interceptors || {})
+            },
             ...config
         };
     }
