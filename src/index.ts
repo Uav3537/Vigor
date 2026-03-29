@@ -140,7 +140,7 @@ class VigorRetry<T = any> {
                     return ctx.result;
                 } catch (error) {
                     ctx.error = error;
-                    ctx.wait = Math.min(Math.pow(ctx.backoff, ctx.attempt - 1) * ctx.baseDelay, max) + ctx.jitter;
+                    ctx.wait = Math.min(Math.pow(ctx.backoff, ctx.attempt - 1) * ctx.baseDelay, max) + ctx.jitter * Math.random();
                     for (const func of onRetry) {
                         if (typeof func !== 'function') throw new VigorRetryError('Interceptor<onRetry> is not a function', { type: "not a function", data: "retry" });
                         const next = await func(ctx, ctx.error);
@@ -256,42 +256,41 @@ class VigorFetch<T = any> {
 
     constructor(origin = "", config: any = {}) {
         this._config = {
-            request: {
-                origin, path: "", query: {},
-                method: "", headers: {}, body: null, offset: {},
-                ...(config.request || {})
-            },
-            retry: {
-                limit: 10000,
-                retryHeaders: ["retry-after", "ratelimit-reset", "x-ratelimit-reset", "x-retry-after", "x-amz-retry-after", "chrome-proxy-next-link"],
-                unretry: new Set([400, 401, 403, 404, 406, 409, 410, 411, 413, 414, 415, 422]),
-                ...(config.retry || {})
-            },
-            response: { 
-                retryConfig: undefined, 
-                parseConfig: undefined,
-                ...(config.response || {})
-            },
-            interceptors: { 
-                before: [], after: [], onError: [], result: [],
-                ...(config.interceptors || {})
-            },
+            request: { origin, path: "", query: {}, method: "", headers: {}, body: null, offset: {} },
+            retry: { limit: 10000, retryHeaders: ["retry-after", "ratelimit-reset"], unretry: new Set([400, 404]) },
+            response: { retryConfig: undefined, parseConfig: undefined },
+            interceptors: { before: [], after: [], onError: [], result: [] },
             ...config
         };
     }
 
     private _next(changes: any): VigorFetch<T> {
-        return new (this.constructor as any)(this._config.request.origin, {
+        const newConfig = {
             ...this._config,
-            ...changes,
             request: { ...this._config.request, ...(changes.request || {}) },
             retry: { ...this._config.retry, ...(changes.retry || {}) },
             response: { ...this._config.response, ...(changes.response || {}) },
             interceptors: { 
-                ...this._config.interceptors, 
+                before: [...(this._config.interceptors.before || [])],
+                after: [...(this._config.interceptors.after || [])],
+                onError: [...(this._config.interceptors.onError || [])],
+                result: [...(this._config.interceptors.result || [])],
                 ...(changes.interceptors || {}) 
             }
-        });
+        };
+
+        if (changes.interceptors) {
+            Object.keys(changes.interceptors).forEach(key => {
+                if (Array.isArray(changes.interceptors[key])) {
+                    newConfig.interceptors[key] = [
+                        ...this._config.interceptors[key],
+                        ...changes.interceptors[key]
+                    ];
+                }
+            });
+        }
+
+        return new (this.constructor as any)(newConfig.request.origin, newConfig);
     }
 
     origin(str: string) { return this._next({ request: { origin: str } }); }

@@ -245,41 +245,38 @@ class VigorParse {
 class VigorFetch {
     constructor(origin = "", config = {}) {
         this._config = {
-            request: {
-                origin, path: "", query: {},
-                method: "", headers: {}, body: null, offset: {},
-                ...(config.request || {})
-            },
-            retry: {
-                limit: 10000,
-                retryHeaders: ["retry-after", "ratelimit-reset", "x-ratelimit-reset", "x-retry-after", "x-amz-retry-after", "chrome-proxy-next-link"],
-                unretry: new Set([400, 401, 403, 404, 406, 409, 410, 411, 413, 414, 415, 422]),
-                ...(config.retry || {})
-            },
-            response: {
-                retryConfig: undefined,
-                parseConfig: undefined,
-                ...(config.response || {})
-            },
-            interceptors: {
-                before: [], after: [], onError: [], result: [],
-                ...(config.interceptors || {})
-            },
+            request: { origin, path: "", query: {}, method: "", headers: {}, body: null, offset: {} },
+            retry: { limit: 10000, retryHeaders: ["retry-after", "ratelimit-reset"], unretry: new Set([400, 404]) },
+            response: { retryConfig: undefined, parseConfig: undefined },
+            interceptors: { before: [], after: [], onError: [], result: [] },
             ...config
         };
     }
     _next(changes) {
-        return new this.constructor(this._config.request.origin, {
+        const newConfig = {
             ...this._config,
-            ...changes,
             request: { ...this._config.request, ...(changes.request || {}) },
             retry: { ...this._config.retry, ...(changes.retry || {}) },
             response: { ...this._config.response, ...(changes.response || {}) },
             interceptors: {
-                ...this._config.interceptors,
+                before: [...(this._config.interceptors.before || [])],
+                after: [...(this._config.interceptors.after || [])],
+                onError: [...(this._config.interceptors.onError || [])],
+                result: [...(this._config.interceptors.result || [])],
                 ...(changes.interceptors || {})
             }
-        });
+        };
+        if (changes.interceptors) {
+            Object.keys(changes.interceptors).forEach(key => {
+                if (Array.isArray(changes.interceptors[key])) {
+                    newConfig.interceptors[key] = [
+                        ...this._config.interceptors[key],
+                        ...changes.interceptors[key]
+                    ];
+                }
+            });
+        }
+        return new this.constructor(newConfig.request.origin, newConfig);
     }
     origin(str) { return this._next({ request: { origin: str } }); }
     path(str) { return this._next({ request: { path: str } }); }
