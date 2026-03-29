@@ -55,7 +55,7 @@ class VigorFetchError extends VigorError {
 class VigorAllError extends VigorError {
     constructor(text: string, options: VigorErrorOptions) {
         super(text, options);
-        this.message = options.message || `[VigorFetchError] ${text}`;
+        this.message = options.message || `[VigorAllError] ${text}`;
     }
 }
 
@@ -374,7 +374,7 @@ class VigorFetch<T = any> {
             for (const func of result) {
                 if (typeof func !== 'function') throw new VigorFetchError('Interceptor<result> is not a function', { type: "not a function", data: "result" });
                 const next = await func(ctx.final);
-                if (next !== undefined && typeof next === 'object' && !Array.isArray(next)) ctx.final = { ...ctx, ...next };
+                if (next !== undefined) ctx.final = next;
             }
 
             if (ctx.final instanceof Error) throw ctx.final;
