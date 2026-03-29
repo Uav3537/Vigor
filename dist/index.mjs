@@ -34,7 +34,7 @@ class VigorFetchError extends VigorError {
 class VigorAllError extends VigorError {
     constructor(text, options) {
         super(text, options);
-        this.message = options.message || `[VigorFetchError] ${text}`;
+        this.message = options.message || `[VigorAllError] ${text}`;
     }
 }
 /**
@@ -58,8 +58,14 @@ class VigorRetry {
         return new this.constructor(this._target, this._args, {
             ...this._config,
             ...changes,
-            retry: { ...this._config.retry, ...(changes.retry || {}) },
-            interceptors: { ...this._config.interceptors, ...(changes.interceptors || {}) }
+            retry: {
+                ...this._config.retry,
+                ...(changes.retry || {})
+            },
+            interceptors: {
+                ...this._config.interceptors,
+                ...(changes.interceptors || {})
+            }
         });
     }
     args(...args) { return new this.constructor(this._target, args, this._config); }
@@ -161,8 +167,14 @@ class VigorParse {
         return new this.constructor(this._response, {
             ...this._config,
             ...changes,
-            settings: { ...this._config.settings, ...(changes.settings || {}) },
-            interceptors: { ...this._config.interceptors, ...(changes.interceptors || {}) }
+            settings: {
+                ...this._config.settings,
+                ...(changes.settings || {})
+            },
+            interceptors: {
+                ...this._config.interceptors,
+                ...(changes.interceptors || {})
+            }
         });
     }
     original(bool) { return this._next({ settings: { original: bool } }); }
@@ -235,15 +247,24 @@ class VigorFetch {
         this._config = {
             request: {
                 origin, path: "", query: {},
-                method: "", headers: {}, body: null, offset: {}
+                method: "", headers: {}, body: null, offset: {},
+                ...(config.request || {})
             },
             retry: {
                 limit: 10000,
                 retryHeaders: ["retry-after", "ratelimit-reset", "x-ratelimit-reset", "x-retry-after", "x-amz-retry-after", "chrome-proxy-next-link"],
                 unretry: new Set([400, 401, 403, 404, 406, 409, 410, 411, 413, 414, 415, 422]),
+                ...(config.retry || {})
             },
-            response: { retryConfig: undefined, parseConfig: undefined },
-            interceptors: { before: [], after: [], onError: [], result: [] },
+            response: {
+                retryConfig: undefined,
+                parseConfig: undefined,
+                ...(config.response || {})
+            },
+            interceptors: {
+                before: [], after: [], onError: [], result: [],
+                ...(config.interceptors || {})
+            },
             ...config
         };
     }
@@ -253,7 +274,11 @@ class VigorFetch {
             ...changes,
             request: { ...this._config.request, ...(changes.request || {}) },
             retry: { ...this._config.retry, ...(changes.retry || {}) },
-            interceptors: { ...this._config.interceptors, ...(changes.interceptors || {}) }
+            response: { ...this._config.response, ...(changes.response || {}) },
+            interceptors: {
+                ...this._config.interceptors,
+                ...(changes.interceptors || {})
+            }
         });
     }
     origin(str) { return this._next({ request: { origin: str } }); }
@@ -348,12 +373,13 @@ class VigorFetch {
             }
             const parseInstance = new VigorParse(ctx.result, parseConfig);
             ctx.final = await parseInstance.request();
-            for (const func of result) {
+            const finalInterceptors = this._config.interceptors.result || [];
+            for (const func of finalInterceptors) {
                 if (typeof func !== 'function')
-                    throw new VigorFetchError('Interceptor<result> is not a function', { type: "not a function", data: "result" });
+                    continue;
                 const next = await func(ctx.final);
-                if (next !== undefined && typeof next === 'object' && !Array.isArray(next))
-                    ctx.final = { ...ctx, ...next };
+                if (next !== undefined)
+                    ctx.final = next;
             }
             if (ctx.final instanceof Error)
                 throw ctx.final;
@@ -391,9 +417,18 @@ class VigorAll {
         return new this.constructor({
             ...this._config,
             ...changes,
-            settings: { ...this._config.settings, ...(changes.settings || {}) },
-            request: { ...this._config.request, ...(changes.request || {}) },
-            interceptors: { ...this._config.interceptors, ...(changes.interceptors || {}) }
+            settings: {
+                ...this._config.settings,
+                ...(changes.settings || {})
+            },
+            request: {
+                ...this._config.request,
+                ...(changes.request || {})
+            },
+            interceptors: {
+                ...this._config.interceptors,
+                ...(changes.interceptors || {})
+            }
         });
     }
     promises(...func) { return this._next({ request: { promises: [...this._config.request.promises, ...func.flat()] } }); }

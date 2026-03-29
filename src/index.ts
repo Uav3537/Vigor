@@ -395,9 +395,10 @@ class VigorFetch<T = any> {
 
             const parseInstance = new VigorParse(ctx.result, parseConfig);
             ctx.final = await parseInstance.request();
+            const finalInterceptors = this._config.interceptors.result || []; 
 
-            for (const func of result) {
-                if (typeof func !== 'function') throw new VigorFetchError('Interceptor<result> is not a function', { type: "not a function", data: "result" });
+            for (const func of finalInterceptors) {
+                if (typeof func !== 'function') continue;
                 const next = await func(ctx.final);
                 if (next !== undefined) ctx.final = next;
             }
