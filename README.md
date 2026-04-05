@@ -76,7 +76,7 @@ Builds and executes an HTTP request.
 | `.headers(obj)` | Set request headers |
 | `.body(obj)` | Set the request body (objects/arrays are automatically JSON-serialized) |
 | `.offset(obj)` | Pass options directly to `fetch` |
-| `.maxDelay(ms)` | Maximum wait time per retry (ms) |
+| `.limit(ms)` | Maximum wait time per retry (ms) |
 | `.retryHeaders(...str)` | Add custom headers for Rate Limit detection |
 | `.unretry(...int)` | Set HTTP status codes that should not be retried |
 | `.retryConfig(fn)` | Customize the internal VigorRetry configuration |
