@@ -121,7 +121,7 @@ class VigorRetry {
                 }
                 catch (error) {
                     ctx.error = error;
-                    ctx.wait = Math.min(Math.pow(ctx.backoff, ctx.attempt - 1) * ctx.baseDelay, max) + ctx.jitter;
+                    ctx.wait = Math.min(Math.pow(ctx.backoff, ctx.attempt - 1) * ctx.baseDelay, max) + ctx.jitter * Math.random();
                     for (const func of onRetry) {
                         if (typeof func !== 'function')
                             throw new VigorRetryError('Interceptor<onRetry> is not a function', { type: "not a function", data: "retry" });
@@ -289,7 +289,7 @@ class VigorFetch {
     headers(obj) { return this._next({ request: { headers: obj } }); }
     body(obj) { return this._next({ request: { body: obj } }); }
     offset(obj) { return this._next({ request: { offset: obj } }); }
-    maxDelay(ms) { return this._next({ retry: { maxDelay: ms } }); }
+    limit(ms) { return this._next({ retry: { limit: ms } }); }
     retryHeaders(...str) { return this._next({ retry: { retryHeaders: [...this._config.retry.retryHeaders, ...str.flat()] } }); }
     unretry(...int) { return this._next({ retry: { unretry: new Set(int.flat()) } }); }
     before(...func) { return this._next({ interceptors: { before: [...this._config.interceptors.before, ...func.flat()] } }); }

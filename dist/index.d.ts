@@ -76,7 +76,7 @@ declare class VigorFetch<T = any> {
     headers(obj: object): VigorFetch<T>;
     body(obj: any): VigorFetch<T>;
     offset(obj: object): VigorFetch<T>;
-    maxDelay(ms: number): VigorFetch<T>;
+    limit(ms: number): VigorFetch<T>;
     retryHeaders(...str: string[]): VigorFetch<T>;
     unretry(...int: number[]): VigorFetch<T>;
     before(...func: Function[]): VigorFetch<T>;

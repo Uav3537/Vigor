@@ -300,7 +300,7 @@ class VigorFetch<T = any> {
     headers(obj: object) { return this._next({ request: { headers: obj } }); }
     body(obj: any) { return this._next({ request: { body: obj } }); }
     offset(obj: object) { return this._next({ request: { offset: obj } }); }
-    maxDelay(ms: number) { return this._next({ retry: { maxDelay: ms } }); }
+    limit(ms: number) { return this._next({ retry: { limit: ms } }); }
     retryHeaders(...str: string[]) { return this._next({ retry: { retryHeaders: [...this._config.retry.retryHeaders, ...str.flat()] } }); }
     unretry(...int: number[]) { return this._next({ retry: { unretry: new Set(int.flat()) } }); }
     before(...func: Function[]) { return this._next({ interceptors: { before: [...this._config.interceptors.before, ...func.flat()] } }); }
