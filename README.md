@@ -1,6 +1,6 @@
 # vigor-fetch
 
-**Vigor** is a lightweight TypeScript HTTP utility library.  
+**Vigor** is a lightweight (gzipped ~3.3kb) TypeScript HTTP utility library.  
 It lets you compose `fetch`, retry, response parsing, and parallel requests using a clean fluent chaining API.
 
 ---
