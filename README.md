@@ -1,6 +1,6 @@
 # vigor-fetch
 
-**Vigor** is a lightweight (gzipped ~7.7kb) TypeScript HTTP / Retry utility library.  
+**Vigor** is a lightweight (minified + gzipped ~4.3kb) TypeScript HTTP / Retry utility library.  
 Vigor provides a fluent, chainable API for building robust network logic with built-in retry, backoff, interceptors, parsing, and concurrency control.
 
 ---

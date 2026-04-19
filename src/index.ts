@@ -1009,7 +1009,7 @@ class VigorAll<T extends any> extends VigorStatus<VigorAllConfig<T>, VigorAll<T>
             })
             const throwError = (error?: Error) => {throw error}
             try {
-                await new Promise(resolve => setTimeout(resolve, ctx.setting.jitter))
+                await new Promise(resolve => setTimeout(resolve, calculateJitter(ctx.setting.jitter)))
                 let res: T
                 for(const func of ctx.interceptors.before) {
                     await func(ctx, {throwError})
