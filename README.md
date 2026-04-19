@@ -1,36 +1,21 @@
 # vigor-fetch
 
-**Vigor** is a lightweight (gzipped ~3.3kb) TypeScript HTTP utility library.  
-It lets you compose `fetch`, retry, response parsing, and parallel requests using a clean fluent chaining API.
+**Vigor** is a lightweight (gzipped ~7.7kb) TypeScript HTTP / Retry utility library.  
+Vigor provides a fluent, chainable API for building robust network logic with built-in retry, backoff, interceptors, parsing, and concurrency control.
 
 ---
 
 ## Features
 
-- 🔁 **Auto Retry** — Exponential backoff with jitter support
-- 🌐 **Smart Fetch** — Automatic 429 Rate Limit header handling, configurable unretry status codes
-- 📦 **Auto Parsing** — Content-Type based response parsing (JSON, Blob, FormData, etc.)
-- ⚡ **Parallel Requests** — `Promise.allSettled` wrapper with concurrency limit and jitter
-- 🔌 **Interceptors** — Lifecycle hooks: `before` / `after` / `onRetry` / `onError`
-- 🧩 **Plugins** — Extend functionality via the `use()` method
-- 💡 **Immutable Chaining** — Every config method returns a new instance with no side effects
-- ⚡ **Zero Dependencies** — Built using native Fetch API and AbortController.
+- 🧩 **Fluent & Immutable API** — Fully composable, side-effect-free chaining
+- 🔁 **Advanced Retry System** — Exponential backoff with jitter support.
+- 🌐 **Smart Fetch Layer** — Automatic 429 handling & configurable retry rules
+- ⚡ **Parallel Requests** — Concurrency-limited task runner
+- 🔌 **Smart Response Parsing** — Auto parsing based on Content-Type
+- ⚡ **Zero Dependencies** — Built on native Fetch + AbortController
+- 🪝 **Powerful Interceptors** — Lifecycle hooks for full control flow
+- 🧠 **TypeScript First** — Fully typed inference across all modules
 ---
-
-## Why Vigor?
- 
-| Feature | Vigor | native fetch | ky | axios |
-|---|:---:|:---:|:---:|:---:|
-| Zero dependencies | ✅ | ✅ | ✅ | ❌ |
-| Auto retry with backoff | ✅ | ❌ | ✅ | ❌ |
-| 429 rate-limit header handling | ✅ | ❌ | ❌ | ❌ |
-| Jitter on retry | ✅ | ❌ | ❌ | ❌ |
-| Auto response parsing | ✅ | ❌ | partial | partial |
-| Fluent chaining API | ✅ | ❌ | ✅ | ❌ |
-| Concurrency-limited parallel requests | ✅ | ❌ | ❌ | ❌ |
-| Lifecycle interceptors | ✅ | ❌ | ✅ | ✅ |
-| Plugin system | ✅ | ❌ | ❌ | ❌ |
-| TypeScript-first | ✅ | ❌ | ✅ | partial |
 
 ## Installation
 
@@ -38,252 +23,384 @@ It lets you compose `fetch`, retry, response parsing, and parallel requests usin
 npm install vigor-fetch
 ```
 
----
+## Why Vigor?
+ 
+| Feature | Vigor | native fetch | ky | axios |
+|---|:---:|:---:|:---:|:---:|
+| Zero dependencies | ✅ | ✅ | ❌ | ✅ |
+| 429 rate-limit handling | ✅ | ❌ | ✅(manual/config-based) | ❌ |
+| Retry with jitter | ✅ | ❌ | ✅ | ❌ |
+| Exponential backoff | ✅ | ❌ | ✅ | ❌ |
+| Auto response parsing | ✅ | ❌ | ✅ | ✅ |
+| Fluent chaining API | ✅ | ❌ | ✅ | ❌ |
+| Concurrency control | ✅ | ❌ | ❌ | ❌ |
+| Lifecycle interceptors | ✅ | ❌ | partial | ❌ |
+| Plugin system | ✅ | ❌ | ❌ | ❌ |
 
 ## Quick Start
 
-```typescript
-import vigor from 'vigor-fetch';
-
-// Basic GET request
+```ts
+import vigor from "vigor-fetch";
 const data = await vigor
-  .fetch('https://api.example.com')
-  .path('/users')
-  .request();
-
-// POST request
-const result = await vigor
-  .fetch('https://api.example.com')
-  .path('/users')
-  .body({ name: 'John', age: 30 })
-  .request();
+  .fetch("https://api.example.com")
+  .path("api", "v1", "main")
+  .request()
 ```
+
+# 🛠️ Vigor API Reference (Rewritten)
 
 ---
 
-## API Reference
+# 📡 vigor.fetch(origin)
 
-### `vigor.fetch(origin?)` — VigorFetch
+vigor.fetch(origin: string)
 
-Builds and executes an HTTP request.
+## Chain Methods
 
-| Method | Description |
-|---|---|
-| `.origin(str)` | Set the base URL |
-| `.path(str)` | Set the URL path |
-| `.query(obj)` | Set query parameters |
-| `.method(str)` | Set the HTTP method (default: POST if body present, otherwise GET) |
-| `.headers(obj)` | Set request headers |
-| `.body(obj)` | Set the request body (objects/arrays are automatically JSON-serialized) |
-| `.offset(obj)` | Pass options directly to `fetch` |
-| `.limit(ms)` | Maximum wait time per retry (ms) |
-| `.retryHeaders(...str)` | Add custom headers for Rate Limit detection |
-| `.unretry(...int)` | Set HTTP status codes that should not be retried |
-| `.retryConfig(fn)` | Customize the internal VigorRetry configuration |
-| `.parseConfig(fn)` | Customize the internal VigorParse configuration |
-| `.before(...fn)` | Interceptor called before the request |
-| `.after(...fn)` | Interceptor called after response is received (before parsing) |
-| `.result(...fn)` | Interceptor called after parsing is complete |
-| `.onError(...fn)` | Interceptor called on error |
-| `.request()` | Execute the request |
+| Method | Type | Description |
+|--------|------|-------------|
+| origin | (string) => VigorFetch | Set base URL |
+| path | (...string[]) => VigorFetch | Append URL path segments |
+| query | (object) => VigorFetch | Set query parameters |
+| method | (VigorFetchMethods) => VigorFetch | Set HTTP method |
+| headers | (HeadersInit) => VigorFetch | Set request headers |
+| body | (any) => VigorFetch | Set request body |
+| options | (object) => VigorFetch | Merge fetch options |
+| setting | (fn: (s: VigorFetchSettings) => VigorFetchSettings) => VigorFetch | Settings pipeline |
+| retryConfig | (fn: (r: VigorRetry) => VigorRetry) => VigorFetch | Retry engine config |
+| parseConfig | (fn: (p: VigorParse) => VigorParse) => VigorFetch | Response parser config |
+| interceptors | (fn: (i: VigorFetchInterceptors) => VigorFetchInterceptors) => VigorFetch | Lifecycle hooks |
+| request | () => Promise<T> | Execute request |
 
-**Example**
+---
 
-```typescript
-const data = await vigor
-  .fetch('https://api.example.com')
-  .path('/items')
-  .query({ page: 1, limit: 20 })
-  .headers({ Authorization: 'Bearer TOKEN' })
-  .retryConfig(r => r.count(3).baseDelay(500))
-  .before(async (ctx) => {
-    console.log('Request started:', ctx.url);
+## ⚙️ fetch().setting(s => s)
+
+| Field | Type | Description |
+|------|------|-------------|
+| origin | string | Base URL |
+| path | string[] | URL segments |
+| query | object | Query params |
+| unretry | number[] | Non-retry status codes |
+| retryHeaders | string[] | Retry-related headers |
+| method | string | HTTP method |
+| headers | object | Request headers |
+| body | any | Request body |
+| options | object | Fetch options |
+| default | T | Fallback value |
+
+---
+
+## 🧩 fetch().interceptors(i => i)
+
+| Hook | Signature | Description |
+|------|----------|-------------|
+| before | (ctx, { setOptions, throwError }) => void | Before request |
+| after | (ctx, { throwError }) => void | After success |
+| onError | (ctx, { setResult, throwError }) => void | Error handler |
+| result | (ctx, { setResult, throwError }) => void | Final result hook |
+
+---
+
+# 🔁 vigor.retry(task)
+
+vigor.retry(task: VigorRetryTask<T>)
+
+## Methods
+
+| Method | Type | Description |
+|--------|------|-------------|
+| target | (fn: VigorRetryTask<T>) => VigorRetry | Set retry function |
+| setting | (fn: (s: VigorRetrySettings) => VigorRetrySettings) => VigorRetry | Retry settings |
+| backoff | (fn: (b: VigorRetryBackoff) => VigorRetryBackoff) => VigorRetry | Backoff strategy |
+| interceptors | (fn: (i: VigorRetryInterceptors) => VigorRetryInterceptors) => VigorRetry | Lifecycle hooks |
+| request | () => Promise<T> | Execute retry flow |
+| createController | () => (error: Error) => void | Abort controller |
+
+---
+
+## ⚙️ retry().setting(s => s)
+
+| Field | Type | Description |
+|------|------|-------------|
+| count | number | Max retry attempts |
+| limit | number | Timeout per attempt |
+| maxDelay | number | Max delay cap |
+| default | T | Fallback value |
+
+---
+
+## 📈 retry().backoff(b => b)
+
+| Field | Type | Description |
+|------|------|-------------|
+| initialDelay | number | Initial delay |
+| baseDelay | number | Base delay |
+| factor | number | Exponential multiplier |
+| jitter | number | Random noise |
+
+---
+
+## 🧩 retry().interceptors(i => i)
+
+| Hook | Signature | Description |
+|------|----------|-------------|
+| before | (ctx, { setAttempt, throwError, abort }) => void | Before execution |
+| after | (ctx, { setAttempt, setResult, throwError }) => void | After success |
+| onError | (ctx, { setResult, throwError }) => void | Error handling |
+| onRetry | (ctx, { setDelay }) => void | Retry event |
+| retryIf | (ctx, { proceedRetry, cancelRetry }) => void | Retry decision |
+
+---
+
+# ⚡ vigor.all(tasks)
+
+vigor.all(tasks: VigorAllTask<T>[])
+
+## Methods
+
+| Method | Type | Description |
+|--------|------|-------------|
+| target | (...tasks) => VigorAll | Set tasks |
+| setting | (fn: (s: VigorAllSettings) => VigorAllSettings) => VigorAll | Concurrency config |
+| interceptors | (fn: (i: VigorAllInterceptors) => VigorAllInterceptors) => VigorAll | Hooks |
+| request | () => Promise<Array<T | Error>> | Execute all tasks |
+
+---
+
+## ⚙️ all().setting(s => s)
+
+| Field | Type | Description |
+|------|------|-------------|
+| concurrency | number | Max parallel tasks |
+| jitter | number | Delay randomness |
+
+---
+
+## 🧩 all().interceptors(i => i)
+
+| Hook | Signature | Description |
+|------|----------|-------------|
+| before | (ctx) => void | Before each task |
+| after | (ctx, { setResult }) => void | After success |
+| onError | (ctx, { setResult }) => void | Error handling |
+| result | (ctx, { setResult }) => void | Final aggregation |
+
+---
+
+# 🧪 vigor.parse(response)
+
+vigor.parse(response: Response)
+
+| Method | Type | Description |
+|--------|------|-------------|
+| target | Response | Set response |
+| original | boolean | Return raw response |
+| type | keyof Response | Force parse type |
+| request | () => Promise<T> | Execute parsing |
+
+---
+
+# 🚀 vigor.fetch examples
+
+## GET request
+```ts
+vigor.fetch("https://api.example.com")
+  .path("users", "profile")
+  .query({ id: 123 })
+  .method("GET")
+  .request()
+```
+---
+
+## POST request
+```ts
+vigor.fetch("https://api.example.com")
+  .path("users")
+  .method("POST")
+  .headers({
+    Authorization: "Bearer TOKEN"
   })
-  .onError(async (ctx, err) => {
-    console.error('Error occurred:', err.message);
+  .body({
+    name: "John",
+    age: 30
   })
-  .request();
+  .request()
 ```
-
 ---
 
-### `vigor.retry(target, args?, config?)` — VigorRetry
+## fetch + retry + backoff + parse
+```ts
+vigor.fetch("https://api.example.com")
+  .path("data")
+  .retryConfig(r =>
+    r
+      .setting(s =>
+        s
+          .count(3)
+          .limit(5000)
+      )
+      .backoff(b =>
+        b
+          .factor(2)
+          .jitter(300)
+      )
+  )
+  .parseConfig(p =>
+    p.original(false)
+  )
+  .request()
+```
+---
 
-Applies retry logic to any async function.
+# 🔁 vigor.retry examples
 
-| Method | Description |
-|---|---|
-| `.args(...args)` | Set arguments to pass to the target function |
-| `.count(n)` | Maximum number of attempts (default: 5) |
-| `.max(ms)` | Maximum wait time per attempt (default: 10000ms) |
-| `.backoff(factor)` | Exponential backoff multiplier (default: 1.3) |
-| `.baseDelay(ms)` | Base delay between retries (default: 1000ms) |
-| `.jitter(ms)` | Random jitter range added to each delay (default: 500ms) |
-| `.before(...fn)` | Interceptor called before each attempt |
-| `.after(...fn)` | Interceptor called after each successful attempt |
-| `.onRetry(...fn)` | Interceptor called when a retry is triggered |
-| `.onError(...fn)` | Interceptor called on final failure |
-| `.request()` | Execute |
+## basic retry
+```ts
+vigor.retry(async (ctx, { signal }) => {
+  const res = await fetch("https://api.example.com/data", { signal })
+  if (!res.ok) throw new Error("failed")
+  return res.json()
+})
+.setting(s =>
+  s
+    .count(5)
+    .limit(3000)
+)
+.backoff(b =>
+  b
+    .baseDelay(500)
+    .factor(2)
+)
+.request()
+```
+---
 
-**Example**
+## retryIf control
+```ts
+vigor.retry(async () => {
+  const res = await fetch("https://api.example.com")
+  return res.json()
+})
+.interceptors(i =>
+  i.retryIf((ctx, { cancelRetry }) => {
+    const result = ctx.runtime.result
 
-```typescript
-const result = await vigor
-  .retry(async () => {
-    const res = await fetch('https://api.example.com/unstable');
-    if (!res.ok) throw new Error('Failed');
-    return res.json();
+    if (result?.error === "fatal") {
+      cancelRetry()
+    }
   })
-  .count(5)
-  .baseDelay(1000)
-  .backoff(1.5)
-  .jitter(300)
-  .onRetry(async (ctx) => {
-    console.log(`Retry #${ctx.attempt}, waiting ${ctx.wait}ms`);
-  })
-  .request();
+)
+.request()
 ```
-
 ---
 
-### `vigor.parse(response?)` — VigorParse
+## abort controller
+```ts
+const retry = vigor.retry(async (ctx, { signal }) => {
+  const res = await fetch("https://api.example.com", { signal })
+  return res.json()
+})
 
-Automatically parses a `Response` object based on its Content-Type.
+const abort = retry.createController()
 
-| Content-Type | Parsing Method |
-|---|---|
-| `application/json` | `response.json()` |
-| `multipart/form-data` | `response.formData()` |
-| `application/octet-stream` | `response.arrayBuffer()` |
-| `image/*`, `video/*`, `audio/*`, `pdf` | `response.blob()` |
-| anything else | `response.text()` |
+setTimeout(() => {
+  abort(new Error("manual abort"))
+}, 2000)
 
-| Method | Description |
-|---|---|
-| `.original(bool)` | If `true`, returns the raw Response without parsing |
-| `.type(str)` | Force a specific parsing method: `'json'`, `'text'`, `'blob'`, etc. |
-| `.before(...fn)` | Interceptor called before parsing |
-| `.after(...fn)` | Interceptor called after parsing |
-| `.onError(...fn)` | Interceptor called on error |
-| `.request()` | Execute parsing |
-
-**Example**
-
-```typescript
-const raw = await fetch('https://api.example.com/data');
-
-// Auto parsing based on Content-Type
-const parsed = await vigor.parse(raw).request();
-
-// Force text parsing
-const text = await vigor.parse(raw).type('text').request();
-
-// Return the raw Response object
-const original = await vigor.parse(raw).original(true).request();
+await retry.request()
 ```
-
 ---
 
-### `vigor.all(config?)` — VigorAll
-
-Runs multiple async tasks in parallel with a concurrency limit.
-
-| Method | Description |
-|---|---|
-| `.promises(...fn)` | Add Promise factory functions to execute |
-| `.limit(n)` | Maximum number of concurrent tasks (default: 10) |
-| `.jitter(ms)` | Random delay before each task starts (default: 1000ms) |
-| `.before(...fn)` | Interceptor called before execution |
-| `.after(...fn)` | Interceptor called after all tasks complete |
-| `.onError(...fn)` | Interceptor called on error |
-| `.request()` | Execute — always returns an array; failed items are `VigorAllError` instances |
-
-**Example**
-
-```typescript
-const tasks = [1, 2, 3, 4, 5].map(id =>
-  () => vigor.fetch('https://api.example.com').path(`/items/${id}`).request()
-);
-
-const results = await vigor
-  .all()
-  .promises(...tasks)
-  .limit(3)     // Run at most 3 tasks concurrently
-  .jitter(200)  // Add 0–200ms random delay before each task starts
-  .request();
-
-results.forEach((res, i) => {
-  if (res instanceof VigorAllError) {
-    console.error(`Task ${i} failed:`, res.message);
-  } else {
-    console.log(`Task ${i} succeeded:`, res);
-  }
-});
+# ⚡ vigor.all examples
+```ts
+vigor.all([
+  async () => fetch("https://api.com/a").then(r => r.json()),
+  async () => fetch("https://api.com/b").then(r => r.json()),
+  async () => fetch("https://api.com/c").then(r => r.json())
+]).request()
 ```
-
+---
+```ts
+vigor.all([
+  async () => "A",
+  async () => "B",
+  async () => "C",
+  async () => "D"
+])
+.setting(s =>
+  s
+    .concurrency(2)
+    .jitter(500)
+)
+.request()
+```
+---
+```ts
+vigor.all([
+  async () => "ok1",
+  async () => { throw new Error("fail") },
+  async () => "ok2"
+]).request()
+```
 ---
 
-## Interceptor Context (`ctx`)
+# 🧪 vigor.parse examples
+```ts
+const res = await fetch("https://api.com/data")
 
-All interceptor functions receive a `ctx` object as their first argument.  
-Returning a plain object from an interceptor merges its keys into `ctx`, making them available to subsequent interceptors.
-
-```typescript
-vigor
-  .fetch('https://api.example.com')
-  .before(async (ctx, option) => {
-    // Access ctx.origin, ctx.path, ctx.option, etc.
-    return { requestId: 'abc-123' }; // merged into ctx
-  })
-  .after(async (ctx, response) => {
-    // ctx.requestId === 'abc-123'
-    // ctx.result: current response object
-  })
-  .request();
+vigor.parse(res).request()
 ```
+---
+```ts
+const img = await fetch("https://api.com/image.png")
 
+vigor.parse(img)
+  .type("blob")
+  .request()
+```
+---
+```ts
+const raw = await fetch("https://api.com")
+
+vigor.parse(raw)
+  .original(true)
+  .request()
+```
 ---
 
-## Error Classes
-
-| Class | Description |
-|---|---|
-| `VigorError` | Base error class |
-| `VigorFetchError` | Error thrown during fetch |
-| `VigorRetryError` | Error thrown during retry |
-| `VigorParseError` | Error thrown during parsing |
-| `VigorAllError` | Error thrown during parallel execution |
-
-All errors share the following shape:
-
-```typescript
-interface VigorErrorOptions {
-  type?: string;    // Error category
-  data?: any;       // Related data
-  status?: number;  // HTTP status code
-  response?: any;   // Original response
-  message?: string; // Custom message
-  origin?: string;  // Request origin
-}
+# 🔥 full pipeline example
+```ts
+vigor.fetch("https://api.example.com")
+  .path("users")
+  .query({ page: 1 })
+  .method("GET")
+  .retryConfig(r =>
+    r
+      .setting(s =>
+        s
+          .count(3)
+          .limit(5000)
+      )
+      .backoff(b =>
+        b
+          .factor(2)
+          .jitter(200)
+      )
+      .interceptors(i =>
+        i.onRetry((ctx, { setDelay }) => {
+          setDelay(1000)
+        })
+      )
+  )
+  .parseConfig(p =>
+    p.original(false)
+  )
+  .interceptors(i =>
+    i.result(() => {
+      console.log("done")
+    })
+  )
+  .request()
 ```
-
----
-
-## Plugins
-
-Use `vigor.use(plugin, options?)` to extend behavior.
-
-```typescript
-const authPlugin = (instance, options) => {
-  const original = instance.fetch.bind(instance);
-  instance.fetch = (origin, config) =>
-    original(origin, config).headers({ Authorization: `Bearer ${options.token}` });
-};
-
-vigor.use(authPlugin, { token: 'MY_TOKEN' });
-
-// Authorization header is now automatically attached to every vigor.fetch() call
-const data = await vigor.fetch('https://api.example.com').path('/me').request();
-```
-
 ---

@@ -86,10 +86,10 @@ abstract class VigorStatus<T, Self> {
     ): C {
         const ErrorCtor = this._errorCtor?.();
         if (typeof fn !== "function" && ErrorCtor) {
-            throw new ErrorCtor("invalid_input", {
+            throw new ErrorCtor("ctor expects function", {
                 method: errorKey,
                 type: "invalid_input",
-                data: { expected: "function", received: typeof fn }
+                data: { expected: "function", received: fn }
             });
         }
 
@@ -355,7 +355,7 @@ class VigorRetry<T> extends VigorStatus<VigorRetryConfig<T>, VigorRetry<T>> {
                             if(ctx.runtime.aborted) return
                             abort(new VigorRetryError(
                                 `timeouted after ${ctx.setting.limit}`,
-                                {method: "request", type: "timeouted",data: {limit: ctx.setting.limit, attempt: ctx.runtime.attempt}}
+                                {method: "request", type: "timeout",data: {limit: ctx.setting.limit, attempt: ctx.runtime.attempt}}
                             ))
                         }, ctx.setting.limit)
                     })
@@ -472,16 +472,18 @@ class VigorParse<T extends any> extends VigorStatus<VigorParseConfig<T>, VigorPa
         let strategy
         try {
             if(config.type) {
-                strategy = parser.find(i => i.key.test(config.type!))
-                if(!strategy) throw new VigorParseError(`invalid parse type: '${config.type}'`,
-                    {method: "request", type: "unsupported_format", data: {
+                strategy = {type: config.type}
+                const parser = config.target[config.type]
+                if(!parser || typeof parser !== 'function') throw new VigorParseError(`failed to parse: '${strategy?.type ?? "unknown"}'`,
+                    {method: "request", type: "invalid_type", data: {
                         expected: config.type,
                         supported: supported,
                         response: config.target,
-                        headers: contentType
+                        headers: contentType,
                     }}
                 )
-                return await strategy.parse(config.target)
+                
+                return await parser()
             }
             strategy = parser.find(i => i.key.test(contentType)) ?? basic
             return await strategy.parse(config.target)
@@ -512,8 +514,7 @@ type VigorFetchSettingsConfig<T> = {
     headers?: HeadersInit;
     body?: XMLHttpRequestBodyInit | null;
     options?: object;
-    default?: T,
-    once: boolean
+    default?: T
 }
 
 class VigorFetchSettings<T> extends VigorStatus<VigorFetchSettingsConfig<T>, VigorFetchSettings<T> > {
@@ -525,7 +526,6 @@ class VigorFetchSettings<T> extends VigorStatus<VigorFetchSettingsConfig<T>, Vig
             query: {},
             unretry: [400, 401, 403, 404, 405, 413, 422],
             retryHeaders: ["retry-after", "ratelimit-reset", "x-ratelimit-reset", "x-retry-after", "x-amz-retry-after", "chrome-proxy-next-link"],
-            once: false
         }
         super({...base, ...config}, (c) => new VigorFetchSettings(c))
         this._base = base
@@ -535,13 +535,12 @@ class VigorFetchSettings<T> extends VigorStatus<VigorFetchSettingsConfig<T>, Vig
     public path(...strs: (string | string[])[]): VigorFetchSettings<T> { return this._next({ path: [...this._config.path!, ...strs.flat()] }) }
     public query(obj: object): VigorFetchSettings<T> { return this._next({ query: { ...this._config.query, ...obj } }) }
     public unretry(...numbers: (number | number[])[]): VigorFetchSettings<T> { return this._next({ unretry: numbers.flat() }) }
-    public retryHeader(...strs: (string | string[])[]): VigorFetchSettings<T> { return this._next({ retryHeaders: [...this._config.retryHeaders!, ...strs.flat()] }) }
+    public retryHeaders(...strs: (string | string[])[]): VigorFetchSettings<T> { return this._next({ retryHeaders: [...this._config.retryHeaders!, ...strs.flat()] }) }
     public method(str: VigorFetchMethods): VigorFetchSettings<T> { return this._next({ method: str }) }
     public headers(obj: HeadersInit): VigorFetchSettings<T> { return this._next({ headers: obj }) }
     public body(obj: XMLHttpRequestBodyInit | null): VigorFetchSettings<T> { return this._next({ body: obj }) }
     public options(obj: object): VigorFetchSettings<T> { return this._next({ options: obj }) }
     public default(obj: T): VigorFetchSettings<T> { return this._next({ default: obj }) }
-    public once(bool: boolean): VigorFetchSettings<T> { return this._next({ once: bool }) }
 }
 
 type VigorFetchBefore<T> = {
@@ -572,7 +571,7 @@ type VigorFetchAfterFn<T> =
 type VigorFetchOnErrorFn<T> =
   (ctx: VigorFetchContext<T>, obj: VigorFetchOnError<T>) => void | Promise<void>
 
-type VigorRetryResult<T> =
+type VigorFetchResultFn<T> =
   (ctx: VigorFetchContext<T>, obj: VigorFetchResult<T>) => void | Promise<void>
 
 
@@ -580,7 +579,7 @@ type VigorFetchInterceptorsConfig<T> = {
     before: VigorFetchBeforeFn<T>[],
     after: VigorFetchAfterFn<T>[],
     onError: VigorFetchOnErrorFn<T>[],
-    result: VigorRetryResult<T>[],
+    result: VigorFetchResultFn<T>[],
 }
 
 class VigorFetchInterceptors<T> extends VigorStatus<VigorFetchInterceptorsConfig<T>, VigorFetchInterceptors<T>> {
@@ -599,7 +598,7 @@ class VigorFetchInterceptors<T> extends VigorStatus<VigorFetchInterceptorsConfig
     public before(...funcs: (VigorFetchBeforeFn<T> | VigorFetchBeforeFn<T>[])[]): VigorFetchInterceptors<T> { return this._next({ before: [...this.getConfig().before, ...funcs.flat()] }) }
     public after(...funcs: (VigorFetchAfterFn<T> | VigorFetchAfterFn<T>[])[]): VigorFetchInterceptors<T> { return this._next({ after: [...this.getConfig().after, ...funcs.flat()] }) }
     public onError(...funcs:(VigorFetchOnErrorFn<T> | VigorFetchOnErrorFn<T>[])[]): VigorFetchInterceptors<T> { return this._next({ onError: [...this.getConfig().onError, ...funcs.flat()] }) }
-    public result(...funcs: (VigorRetryResult<T> | VigorRetryResult<T>[])[]): VigorFetchInterceptors<T> { return this._next({ result: [...this.getConfig().result, ...funcs.flat()] }) }
+    public result(...funcs: (VigorFetchResultFn<T> | VigorFetchResultFn<T>[])[]): VigorFetchInterceptors<T> { return this._next({ result: [...this.getConfig().result, ...funcs.flat()] }) }
 }
 
 type VigorFetchConfig<T> = {
@@ -679,7 +678,7 @@ class VigorFetch<T extends any> extends VigorStatus<VigorFetchConfig<T>, VigorFe
         });
     }
     public buildUrl(origin: string, path: Array<string>, query: object): string {
-        if(!origin) throw new VigorFetchError("buildUrl expects 'origin", {
+        if(!origin) throw new VigorFetchError("buildUrl expects 'origin'", {
             type: "invalid_input", method: "buildUrl", data: {
                 expected: "string", received: origin
             }
@@ -768,9 +767,6 @@ class VigorFetch<T extends any> extends VigorStatus<VigorFetchConfig<T>, VigorFe
                 ...(ctx.setting.body && { body: isJson ? JSON.stringify(ctx.setting.body) : ctx.setting.body }),
                 ...ctx.setting.options,
                 signal: null
-            }
-            if(ctx.setting.once) {
-                await fetch(ctx.runtime.url!, ctx.runtime.options)
             }
 
             const target: VigorRetryTask<T> = async(ctx2, {signal}) => {
@@ -1066,7 +1062,7 @@ function calculateJitter(jitter: number) {
 
 type VigorRegistry = {
     VigorRetry: {
-        main: typeof VigorRetry;
+        main: <T>() => VigorRetry<T>;
         error: typeof VigorRetryError;
         setting: typeof VigorRetrySettings;
         interceptors: typeof VigorRetryInterceptors;
@@ -1074,72 +1070,102 @@ type VigorRegistry = {
     };
 
     VigorFetch: {
-        main: typeof VigorFetch;
+        main: <T>() => VigorFetch<T>;
         error: typeof VigorFetchError;
         setting: typeof VigorFetchSettings;
         interceptors: typeof VigorFetchInterceptors;
     };
 
     VigorAll: {
-        main: typeof VigorAll;
+        main: <T>() => VigorAll<T>;
         error: typeof VigorAllError;
         setting: typeof VigorAllSettings;
         interceptors: typeof VigorAllInterceptors;
     };
 
     VigorParse: {
-        main: typeof VigorParse;
+        main: <T>() => VigorParse<T>;
         error: typeof VigorParseError;
     };
 };
 
-class Vigor {
-    private _VigorRetry = {
-        main: VigorRetry,
-        error: VigorRetryError,
-        setting: VigorRetrySettings,
-        interceptors: VigorRetryInterceptors,
-        backoff: VigorRetryBackoff
-    }
-    private _VigorFetch = {
-        main: VigorFetch,
-        error: VigorFetchError,
-        setting: VigorFetchSettings,
-        interceptors: VigorFetchInterceptors,
-    }
-    private _VigorAll = {
-        main: VigorAll,
-        error: VigorAllError,
-        setting: VigorAllSettings,
-        interceptors: VigorAllInterceptors
-    }
-    private _VigorParse = {
-        main: VigorParse,
-        error: VigorParseError
-    }
-    constructor() {
+type VigorConfig = {
+    registry: VigorRegistry;
+};
+
+class Vigor  {
+    private readonly registry: VigorRegistry;    
+    constructor(config?: Partial<VigorConfig>) {
+        const defaultRegistry: VigorRegistry = {
+            VigorRetry: {
+                main: () => new VigorRetry<any>(),
+                error: VigorRetryError,
+                setting: VigorRetrySettings,
+                interceptors: VigorRetryInterceptors,
+                backoff: VigorRetryBackoff,
+            },
+
+            VigorFetch: {
+                main: () => new VigorFetch<any>(),
+                error: VigorFetchError,
+                setting: VigorFetchSettings,
+                interceptors: VigorFetchInterceptors,
+            },
+
+            VigorAll: {
+                main: () => new VigorAll<any>(),
+                error: VigorAllError,
+                setting: VigorAllSettings,
+                interceptors: VigorAllInterceptors,
+            },
+
+            VigorParse: {
+                main: () => new VigorParse<any>(),
+                error: VigorParseError,
+            }
+        };
+        this.registry = config?.registry ?? defaultRegistry;
     }
     public fetch(origin: string) {
-        return new VigorFetch().origin(origin)
+        return this.registry.VigorFetch.main().origin(origin);
     }
+
     public all<T>(tasks: (VigorAllTask<T> | VigorAllTask<T>[])[]) {
-        return new VigorAll<T>().target(tasks.flat())
+        return this.registry.VigorAll.main<T>().target(tasks.flat());
     }
+
     public parse(response: Response) {
-        return new VigorParse().target(response)
+        return this.registry.VigorParse.main().target(response);
     }
-    public retry<T>(func: VigorRetryTask<T>) {
-        return new VigorRetry().target(func)
+
+    public retry<T>(fn: VigorRetryTask<T>) {
+        return this.registry.VigorRetry.main<T>().target(fn);
     }
-    private readonly registry: VigorRegistry = {
-        VigorRetry: this._VigorRetry,
-        VigorFetch: this._VigorFetch,
-        VigorAll: this._VigorAll,
-        VigorParse: this._VigorParse,
-    };
-    public use(plugin: (ctx: VigorRegistry, options?: object) => void, options?: object) {
-        plugin(this.registry, options);
-        return this;
+    public use(
+        plugin: (ctx: VigorRegistry, options?: object) => void,
+        options?: object
+    ): Vigor {
+        const nextRegistry = {
+            ...this.registry,
+            VigorFetch: {
+                ...this.registry.VigorFetch
+            },
+            VigorRetry: {
+                ...this.registry.VigorRetry
+            },
+            VigorAll: {
+                ...this.registry.VigorAll
+            },
+            VigorParse: {
+                ...this.registry.VigorParse
+            }
+        }
+
+        plugin(nextRegistry, options);
+
+        return new Vigor({
+            registry: nextRegistry
+        });
     }
 }
 const vigor = new Vigor()
