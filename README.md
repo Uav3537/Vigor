@@ -15,7 +15,10 @@ Vigor provides a fluent, chainable API for building robust network logic with bu
 - ⚡ **Zero Dependencies** — Built on native Fetch + AbortController
 - 🪝 **Powerful Interceptors** — Lifecycle hooks for full control flow
 - 🧠 **TypeScript First** — Fully typed inference across all modules
+
+
 ---
+
 
 ## Installation
 
@@ -47,9 +50,11 @@ const data = await vigor
   .request()
 ```
 
-# 🛠️ Vigor API Reference (Rewritten)
+# 🛠️ Vigor API Reference
+
 
 ---
+
 
 # 📡 vigor.fetch(origin)
 
@@ -72,7 +77,9 @@ vigor.fetch(origin: string)
 | interceptors | (fn: (i: VigorFetchInterceptors) => VigorFetchInterceptors) => VigorFetch | Lifecycle hooks |
 | request | () => Promise<T> | Execute request |
 
+
 ---
+
 
 ## ⚙️ fetch().setting(s => s)
 
@@ -89,7 +96,9 @@ vigor.fetch(origin: string)
 | options | object | Fetch options |
 | default | T | Fallback value |
 
+
 ---
+
 
 ## 🧩 fetch().interceptors(i => i)
 
@@ -100,7 +109,9 @@ vigor.fetch(origin: string)
 | onError | (ctx, { setResult, throwError }) => void | Error handler |
 | result | (ctx, { setResult, throwError }) => void | Final result hook |
 
+
 ---
+
 
 # 🔁 vigor.retry(task)
 
@@ -117,7 +128,9 @@ vigor.retry(task: VigorRetryTask<T>)
 | request | () => Promise<T> | Execute retry flow |
 | createController | () => (error: Error) => void | Abort controller |
 
+
 ---
+
 
 ## ⚙️ retry().setting(s => s)
 
@@ -128,7 +141,9 @@ vigor.retry(task: VigorRetryTask<T>)
 | maxDelay | number | Max delay cap |
 | default | T | Fallback value |
 
+
 ---
+
 
 ## 📈 retry().backoff(b => b)
 
@@ -139,7 +154,9 @@ vigor.retry(task: VigorRetryTask<T>)
 | factor | number | Exponential multiplier |
 | jitter | number | Random noise |
 
+
 ---
+
 
 ## 🧩 retry().interceptors(i => i)
 
@@ -151,7 +168,9 @@ vigor.retry(task: VigorRetryTask<T>)
 | onRetry | (ctx, { setDelay }) => void | Retry event |
 | retryIf | (ctx, { proceedRetry, cancelRetry }) => void | Retry decision |
 
+
 ---
+
 
 # ⚡ vigor.all(tasks)
 
@@ -166,7 +185,9 @@ vigor.all(tasks: VigorAllTask<T>[])
 | interceptors | (fn: (i: VigorAllInterceptors) => VigorAllInterceptors) => VigorAll | Hooks |
 | request | () => Promise<Array<T | Error>> | Execute all tasks |
 
+
 ---
+
 
 ## ⚙️ all().setting(s => s)
 
@@ -175,7 +196,9 @@ vigor.all(tasks: VigorAllTask<T>[])
 | concurrency | number | Max parallel tasks |
 | jitter | number | Delay randomness |
 
+
 ---
+
 
 ## 🧩 all().interceptors(i => i)
 
@@ -186,7 +209,9 @@ vigor.all(tasks: VigorAllTask<T>[])
 | onError | (ctx, { setResult }) => void | Error handling |
 | result | (ctx, { setResult }) => void | Final aggregation |
 
+
 ---
+
 
 # 🧪 vigor.parse(response)
 
@@ -199,7 +224,9 @@ vigor.parse(response: Response)
 | type | keyof Response | Force parse type |
 | request | () => Promise<T> | Execute parsing |
 
+
 ---
+
 
 # 🚀 vigor.fetch examples
 
@@ -274,7 +301,10 @@ vigor.retry(async (ctx, { signal }) => {
 )
 .request()
 ```
+
+
 ---
+
 
 ## retryIf control
 ```ts
@@ -293,7 +323,10 @@ vigor.retry(async () => {
 )
 .request()
 ```
+
+
 ---
+
 
 ## abort controller
 ```ts
@@ -310,7 +343,10 @@ setTimeout(() => {
 
 await retry.request()
 ```
+
+
 ---
+
 
 # ⚡ vigor.all examples
 ```ts
@@ -320,7 +356,11 @@ vigor.all([
   async () => fetch("https://api.com/c").then(r => r.json())
 ]).request()
 ```
+
+
 ---
+
+
 ```ts
 vigor.all([
   async () => "A",
@@ -335,7 +375,11 @@ vigor.all([
 )
 .request()
 ```
+
+
 ---
+
+
 ```ts
 vigor.all([
   async () => "ok1",
@@ -343,7 +387,9 @@ vigor.all([
   async () => "ok2"
 ]).request()
 ```
+
 ---
+
 
 # 🧪 vigor.parse examples
 ```ts
@@ -351,7 +397,11 @@ const res = await fetch("https://api.com/data")
 
 vigor.parse(res).request()
 ```
+
+
 ---
+
+
 ```ts
 const img = await fetch("https://api.com/image.png")
 
@@ -359,7 +409,11 @@ vigor.parse(img)
   .type("blob")
   .request()
 ```
+
+
 ---
+
+
 ```ts
 const raw = await fetch("https://api.com")
 
@@ -367,7 +421,10 @@ vigor.parse(raw)
   .original(true)
   .request()
 ```
+
+
 ---
+
 
 # 🔥 full pipeline example
 ```ts
@@ -403,4 +460,6 @@ vigor.fetch("https://api.example.com")
   )
   .request()
 ```
+
+
 ---
