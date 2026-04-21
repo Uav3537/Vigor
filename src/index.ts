@@ -511,8 +511,8 @@ type VigorFetchSettingsConfig<T> = {
     unretry?: Array<number>,
     retryHeaders?: Array<string>,
     method?: VigorFetchMethods,
-    headers?: HeadersInit;
-    body?: XMLHttpRequestBodyInit | null;
+    headers?: HeadersInit | Record<string, any>;
+    body?: XMLHttpRequestBodyInit | object | null;
     options?: object;
     default?: T
 }
@@ -537,8 +537,8 @@ class VigorFetchSettings<T> extends VigorStatus<VigorFetchSettingsConfig<T>, Vig
     public unretry(...numbers: (number | number[])[]): VigorFetchSettings<T> { return this._next({ unretry: numbers.flat() }) }
     public retryHeaders(...strs: (string | string[])[]): VigorFetchSettings<T> { return this._next({ retryHeaders: [...this._config.retryHeaders!, ...strs.flat()] }) }
     public method(str: VigorFetchMethods): VigorFetchSettings<T> { return this._next({ method: str }) }
-    public headers(obj: HeadersInit): VigorFetchSettings<T> { return this._next({ headers: obj }) }
-    public body(obj: XMLHttpRequestBodyInit | null): VigorFetchSettings<T> { return this._next({ body: obj }) }
+    public headers(obj: HeadersInit | Record<string, any>): VigorFetchSettings<T> { return this._next({ headers: obj }) }
+    public body(obj: XMLHttpRequestBodyInit | object | null): VigorFetchSettings<T> { return this._next({ body: obj }) }
     public options(obj: object): VigorFetchSettings<T> { return this._next({ options: obj }) }
     public default(obj: T): VigorFetchSettings<T> { return this._next({ default: obj }) }
 }
@@ -644,8 +644,8 @@ class VigorFetch<T extends any> extends VigorStatus<VigorFetchConfig<T>, VigorFe
     public path(...strs: (string | string[])[]): VigorFetch<T> { return this._next({ setting: { ...this._config.setting, path: [...this._config.setting.path!, ...strs.flat()] } }) }
     public query(obj: object): VigorFetch<T> { return this._next({ setting: { ...this._config.setting, query: { ...this._config.setting.query, ...obj } } }) }
     public method(str: VigorFetchMethods): VigorFetch<T> { return this._next({ setting: {...this._config.setting, method: str} }) }
-    public headers(obj: HeadersInit): VigorFetch<T> { return this._next({ setting: {...this._config.setting, headers: obj} }) }
-    public body(obj: XMLHttpRequestBodyInit | null): VigorFetch<T> { return this._next({ setting: {...this._config.setting, body: obj} }) }
+    public headers(obj: HeadersInit | Record<string, any>): VigorFetch<T> { return this._next({ setting: {...this._config.setting, headers: obj} }) }
+    public body(obj: XMLHttpRequestBodyInit | object | null): VigorFetch<T> { return this._next({ setting: {...this._config.setting, body: obj} }) }
     public options(obj: object): VigorFetch<T> { return this._next({ setting: {...this._config.setting, options: obj} }) }
     public setting(func: (r: VigorFetchSettings<T>) => VigorFetchSettings<T>): VigorFetch<T> {
         return this._next({
