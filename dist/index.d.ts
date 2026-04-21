@@ -174,8 +174,8 @@ type VigorFetchSettingsConfig<T> = {
     unretry?: Array<number>;
     retryHeaders?: Array<string>;
     method?: VigorFetchMethods;
-    headers?: HeadersInit;
-    body?: XMLHttpRequestBodyInit | null;
+    headers?: HeadersInit | Record<string, any>;
+    body?: XMLHttpRequestBodyInit | object | null;
     options?: object;
     default?: T;
 };
@@ -189,8 +189,8 @@ declare class VigorFetchSettings<T> extends VigorStatus<VigorFetchSettingsConfig
     unretry(...numbers: (number | number[])[]): VigorFetchSettings<T>;
     retryHeaders(...strs: (string | string[])[]): VigorFetchSettings<T>;
     method(str: VigorFetchMethods): VigorFetchSettings<T>;
-    headers(obj: HeadersInit): VigorFetchSettings<T>;
-    body(obj: XMLHttpRequestBodyInit | null): VigorFetchSettings<T>;
+    headers(obj: HeadersInit | Record<string, any>): VigorFetchSettings<T>;
+    body(obj: XMLHttpRequestBodyInit | object | null): VigorFetchSettings<T>;
     options(obj: object): VigorFetchSettings<T>;
     default(obj: T): VigorFetchSettings<T>;
 }
@@ -259,8 +259,8 @@ declare class VigorFetch<T extends any> extends VigorStatus<VigorFetchConfig<T>,
     path(...strs: (string | string[])[]): VigorFetch<T>;
     query(obj: object): VigorFetch<T>;
     method(str: VigorFetchMethods): VigorFetch<T>;
-    headers(obj: HeadersInit): VigorFetch<T>;
-    body(obj: XMLHttpRequestBodyInit | null): VigorFetch<T>;
+    headers(obj: HeadersInit | Record<string, any>): VigorFetch<T>;
+    body(obj: XMLHttpRequestBodyInit | object | null): VigorFetch<T>;
     options(obj: object): VigorFetch<T>;
     setting(func: (r: VigorFetchSettings<T>) => VigorFetchSettings<T>): VigorFetch<T>;
     retryConfig(func: (r: VigorRetry<T>) => VigorRetry<T>): VigorFetch<T>;

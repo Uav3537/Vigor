@@ -669,7 +669,7 @@ class VigorAll extends VigorStatus {
             });
             const throwError = (error) => { throw error; };
             try {
-                await new Promise(resolve => setTimeout(resolve, ctx.setting.jitter));
+                await new Promise(resolve => setTimeout(resolve, calculateJitter(ctx.setting.jitter)));
                 let res;
                 for (const func of ctx.interceptors.before) {
                     await func(ctx, { throwError });
