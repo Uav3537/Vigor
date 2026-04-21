@@ -1098,7 +1098,7 @@ class Vigor  {
     constructor(config?: Partial<VigorConfig>) {
         const defaultRegistry: VigorRegistry = {
             VigorRetry: {
-                main: () => new VigorRetry<any>(),
+                main: <R>() => new VigorRetry<R>(),
                 error: VigorRetryError,
                 setting: VigorRetrySettings,
                 interceptors: VigorRetryInterceptors,
@@ -1106,21 +1106,21 @@ class Vigor  {
             },
 
             VigorFetch: {
-                main: () => new VigorFetch<any>(),
+                main: <R>() => new VigorFetch<R>(),
                 error: VigorFetchError,
                 setting: VigorFetchSettings,
                 interceptors: VigorFetchInterceptors,
             },
 
             VigorAll: {
-                main: () => new VigorAll<any>(),
+                main: <R>() => new VigorAll<R>(),
                 error: VigorAllError,
                 setting: VigorAllSettings,
                 interceptors: VigorAllInterceptors,
             },
 
             VigorParse: {
-                main: () => new VigorParse<any>(),
+                main: <R>() => new VigorParse<R>(),
                 error: VigorParseError,
             }
         };
