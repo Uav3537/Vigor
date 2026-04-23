@@ -195,6 +195,7 @@ vigor.all(tasks: VigorAllTask<T>[])
 |------|------|-------------|
 | concurrency | number | Max parallel tasks |
 | jitter | number | Delay randomness |
+| onlySuccess | boolean | Filters Success |
 
 
 ---
