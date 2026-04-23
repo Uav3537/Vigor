@@ -37,7 +37,7 @@ npm install vigor-fetch
 | Auto response parsing | ✅ | ❌ | ✅ | ✅ |
 | Fluent chaining API | ✅ | ❌ | ✅ | ❌ |
 | Concurrency control | ✅ | ❌ | ❌ | ❌ |
-| Lifecycle interceptors | ✅ | ❌ | partial | ❌ |
+| Lifecycle interceptors | ✅ | ❌ | partial | ✅ |
 | Plugin system | ✅ | ❌ | ❌ | ❌ |
 
 ## Quick Start
