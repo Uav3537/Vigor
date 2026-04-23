@@ -1,41 +1,58 @@
+const VIGOR_ERROR_MESSAGES = {
+    TIMEOUT: ({ limit, attempt }) => `Timeout: exceeded ${limit}ms (attempt: ${attempt})`,
+    EXHAUSTED: ({ maxAttempts }) => `Retry exhausted: max ${maxAttempts})`,
+    INVALID_URL: ({ received }) => `Invalid URL: ${received}`,
+    INVALID_PROTOCOL: ({ expected, received }) => `Invalid protocol: ${received} (expected ${expected.join(", ")})`,
+    FETCH_ERROR: ({ status, statusText, url }) => `HTTP Error: ${status} ${statusText} (url: ${url})`,
+    PARSE_FAILED: ({ expected }) => `Parse failed: expected ${expected}`,
+    INVALID_TYPE: ({ expected, received }) => `Invalid parser type: ${expected}`,
+    TARGET_MISSING: () => `Target missing`,
+    REQUEST_FAILED: ({ index, error }) => `Request failed at index ${index}: ${error.message}`,
+    UNKNOWN: () => `Unknown error`
+};
 class VigorError extends Error {
     timestamp = new Date();
     method;
+    code;
     cause;
     context;
     type;
     data;
-    constructor(message, options) {
+    constructor(code, options) {
+        const messageFn = VIGOR_ERROR_MESSAGES[code];
+        const message = `[${code}] ${messageFn(options?.data)}`;
         super(message, { cause: options?.cause });
         this.name = new.target.name;
         this.method = options?.method;
+        this.code = code;
         this.context = options?.context;
         this.type = options?.type;
-        this.data = options?.data;
+        this.data = options.data;
         Object.setPrototypeOf(this, new.target.prototype);
         Error.captureStackTrace?.(this, new.target);
     }
 }
 class VigorRetryError extends VigorError {
-    constructor(message, options) {
-        super(message, options);
+    constructor(code, options) {
+        super(code, options);
     }
 }
 class VigorParseError extends VigorError {
-    constructor(message, options) {
-        super(message, options);
+    constructor(code, options) {
+        super(code, options);
     }
 }
 class VigorFetchError extends VigorError {
-    constructor(message, options) {
-        super(message, options);
+    constructor(code, options) {
+        super(code, options);
     }
 }
 class VigorAllError extends VigorError {
-    constructor(message, options) {
-        super(message, options);
+    constructor(code, options) {
+        super(code, options);
     }
 }
+const EMPTY = Symbol("EMPTY");
 class VigorStatus {
     _base;
     _config;
@@ -56,6 +73,7 @@ class VigorRetrySettings extends VigorStatus {
             count: 5,
             limit: 10000,
             maxDelay: 10000,
+            default: EMPTY
         });
     }
     count(num) { return this._next({ count: num }); }
@@ -134,7 +152,7 @@ class VigorRetry extends VigorStatus {
             backoff: { ...config.backoff },
             controller: config.controller,
             runtime: {
-                result: null,
+                result: EMPTY,
                 controller: null,
                 attempt: 0,
                 aborted: false,
@@ -175,9 +193,12 @@ class VigorRetry extends VigorStatus {
                         timerId = setTimeout(() => {
                             if (ctx.runtime.aborted)
                                 return;
-                            abort(new VigorRetryError(`timeouted after ${ctx.setting.limit}`, {
-                                method: "request", type: "timeout", data: {
-                                    limit: ctx.setting.limit, attempt: ctx.runtime.attempt
+                            abort(new VigorRetryError("TIMEOUT", {
+                                method: "request",
+                                type: "timeout",
+                                data: {
+                                    limit: ctx.setting.limit,
+                                    attempt: ctx.runtime.attempt
                                 }
                             }));
                         }, ctx.setting.limit);
@@ -236,9 +257,11 @@ class VigorRetry extends VigorStatus {
                 }
                 ctx.runtime.attempt++;
             }
-            throw new VigorRetryError(`Maximum retry attempts (${ctx.setting.count}) reached. Task failed or timed out.`, {
-                method: "request", type: "exhausted", data: {
-                    limit: ctx.setting.limit, attempt: ctx.runtime.attempt, maxAttempts: ctx.setting.count
+            throw new VigorRetryError("EXHAUSTED", {
+                method: "request",
+                type: "retry",
+                data: {
+                    maxAttempts: ctx.setting.count,
                 }
             });
         }
@@ -249,9 +272,9 @@ class VigorRetry extends VigorStatus {
             for (const func of ctx.interceptors.onError) {
                 await func(ctx, { setResult, throwError });
             }
-            if (overrided && ctx.runtime.result !== undefined)
+            if (overrided && ctx.runtime.result !== EMPTY)
                 return ctx.runtime.result;
-            if (ctx.setting.default !== undefined)
+            if (ctx.setting.default !== EMPTY)
                 return ctx.setting.default;
             throw error;
         }
@@ -278,11 +301,10 @@ class VigorParse extends VigorStatus {
     async request() {
         const config = this._config;
         if (!(config.target instanceof Response)) {
-            throw new VigorParseError(`target not found`, {
-                method: "request", type: "args_missing", data: {
-                    expected: "Response",
-                    received: config.target
-                }
+            throw new VigorParseError("TARGET_MISSING", {
+                method: "request",
+                type: "args_missing",
+                data: undefined
             });
         }
         if (config.original) {
@@ -295,12 +317,13 @@ class VigorParse extends VigorStatus {
                 strategy = { type: config.type };
                 const parser = config.target[config.type];
                 if (!parser || typeof parser !== 'function')
-                    throw new VigorParseError(`failed to parse: '${strategy?.type ?? "unknown"}'`, { method: "request", type: "invalid_type", data: {
-                            expected: config.type,
-                            supported: VigorParse.supported,
-                            response: config.target,
-                            headers: contentType,
-                        } });
+                    throw new VigorParseError("PARSE_FAILED", {
+                        method: "request",
+                        type: "parse_failed",
+                        data: {
+                            expected: strategy?.type ?? "unknown"
+                        }
+                    });
                 return await parser();
             }
             strategy = VigorParse.stategy.find(i => i.key.test(contentType)) ?? VigorParse.stategy[0];
@@ -309,13 +332,13 @@ class VigorParse extends VigorStatus {
         catch (error) {
             if (error instanceof VigorParseError)
                 throw error;
-            throw new VigorParseError(`failed to parse: '${strategy?.type ?? "unknown"}'`, { method: "request", type: "parse_failed", data: {
-                    expected: strategy?.type ?? "unknown",
-                    supported: VigorParse.supported,
-                    response: config.target,
-                    headers: contentType,
-                    error
-                } });
+            throw new VigorParseError("PARSE_FAILED", {
+                method: "request",
+                type: "parse_failed",
+                data: {
+                    expected: strategy?.type ?? "unknown"
+                }
+            });
         }
     }
 }
@@ -327,6 +350,7 @@ class VigorFetchSettings extends VigorStatus {
             query: {},
             unretry: [400, 401, 403, 404, 405, 413, 422],
             retryHeaders: ["retry-after", "ratelimit-reset", "x-ratelimit-reset", "x-retry-after", "x-amz-retry-after", "chrome-proxy-next-link"],
+            default: EMPTY
         });
     }
     origin(str) { return this._next({ origin: str }); }
@@ -384,11 +408,9 @@ class VigorFetch extends VigorStatus {
     }
     buildUrl(origin, path, query) {
         if (!origin)
-            throw new VigorFetchError(`Invalid URL origin: ${origin}`, {
-                type: "invalid_url",
+            throw new VigorFetchError("INVALID_URL", {
                 method: "buildUrl",
                 data: {
-                    expected: "string",
                     received: origin
                 }
             });
@@ -439,15 +461,21 @@ class VigorFetch extends VigorStatus {
                 onError: [...config.interceptors.onError],
                 result: [...config.interceptors.result]
             },
-            runtime: {}
+            runtime: {
+                result: EMPTY
+            }
         };
         const throwError = (error) => { throw error; };
         try {
             ctx.runtime.unretrySet = new Set(ctx.setting.unretry);
             if (!/^(https?|data|blob|file|about):\/\//.test(ctx.setting.origin))
-                throw new VigorFetchError(`Invalid Protocol`, { type: "Invalid Protocol", method: "request", data: {
-                        expected: ["http", "https", "data", "blob", "file", "about"], received: ctx.setting.origin
-                    } });
+                throw new VigorFetchError("INVALID_PROTOCOL", {
+                    method: "request",
+                    data: {
+                        expected: ["http", "https", "data", "blob", "file", "about"],
+                        received: ctx.setting.origin
+                    }
+                });
             ctx.runtime.url = this.buildUrl(config.setting.origin, config.setting.path, config.setting.query);
             const isJson = Array.isArray(ctx.setting.body) || (!!ctx.setting.body && Object.getPrototypeOf(ctx.setting.body) === Object.prototype);
             ctx.runtime.baseOptions = {
@@ -468,9 +496,14 @@ class VigorFetch extends VigorStatus {
             const checkOk = async (ctx2, { throwError }) => {
                 const result = ctx2.runtime.result;
                 if (!result.ok)
-                    return throwError?.(new VigorFetchError(`HTTP Error: ${result.status} ${result.statusText}`, {
-                        method: "request", type: "fetch_error",
-                        data: { status: result.status, statusText: result.statusText, url: result.url }
+                    return throwError?.(new VigorFetchError("FETCH_ERROR", {
+                        method: "request",
+                        type: "fetch_error",
+                        data: {
+                            status: result.status,
+                            statusText: result.statusText,
+                            url: result.url
+                        }
                     }));
             };
             const handleBlacklist = (ctx2, { cancelRetry }) => {
@@ -516,9 +549,9 @@ class VigorFetch extends VigorStatus {
             for (const func of ctx.interceptors.onError) {
                 await func(ctx, { setResult, throwError });
             }
-            if (overrided && ctx.runtime.result !== undefined)
+            if (overrided && ctx.runtime.result !== EMPTY)
                 return ctx.runtime.result;
-            if (ctx.setting.default !== undefined)
+            if (ctx.setting.default !== EMPTY)
                 return ctx.setting.default;
             throw error;
         }
@@ -528,11 +561,13 @@ class VigorAllSettings extends VigorStatus {
     constructor(config = {}) {
         super(config, {
             concurrency: 5,
-            jitter: 1000
+            jitter: 1000,
+            onlySuccess: false
         });
     }
     concurrency(num) { return this._next({ concurrency: num }); }
     jitter(num) { return this._next({ jitter: num }); }
+    onlySuccess(bool) { return this._next({ onlySuccess: bool }); }
 }
 class VigorAllInterceptors extends VigorStatus {
     constructor(config = {}) {
@@ -556,9 +591,15 @@ class VigorAll extends VigorStatus {
             interceptors: new VigorAllInterceptors().getBase()
         });
     }
+    _transfer(config) {
+        return new VigorAll({
+            ...this._config,
+            ...config
+        });
+    }
     target(...funcs) {
-        return this._next({
-            target: [...this._config.target, ...funcs.flat()]
+        return this._transfer({
+            target: funcs
         });
     }
     setting(func) {
@@ -574,20 +615,23 @@ class VigorAll extends VigorStatus {
     async request() {
         const config = this._config;
         let ctx = {
+            setting: { ...config.setting },
             target: [...config.target],
+            interceptors: {
+                before: [...config.interceptors.before],
+                after: [...config.interceptors.after],
+                onError: [...config.interceptors.onError],
+                result: [...config.interceptors.result],
+            },
             runtime: {
                 tasks: [],
-                result: []
+                result: [],
             }
         };
         if (ctx.target.length == 0)
-            throw new VigorFetchError("request expects 'target'", {
-                type: "invalid_input",
+            throw new VigorAllError("TARGET_MISSING", {
                 method: "request",
-                data: {
-                    expected: "string",
-                    received: ctx.target
-                }
+                data: undefined
             });
         let active = 0;
         const queue = [];
@@ -605,32 +649,42 @@ class VigorAll extends VigorStatus {
                 }
             });
             const throwError = (error) => { throw error; };
+            let ctxTask = {
+                target: task,
+                runtime: {
+                    result: EMPTY,
+                    error: null,
+                    jitter: VigorRetryBackoff.randomJitter(config.setting.jitter)
+                }
+            };
             try {
-                await new Promise(resolve => setTimeout(resolve, VigorRetryBackoff.randomJitter(config.setting.jitter)));
-                let res;
+                await new Promise(resolve => setTimeout(resolve, ctxTask.runtime.jitter));
                 for (const func of config.interceptors.before) {
-                    await func(ctx, { throwError });
+                    await func(ctxTask, { throwError });
                 }
-                res = await task(ctx, {});
-                const setResult = (result) => res = result;
+                ctxTask.runtime.result = await task(ctxTask, {});
+                const setResult = (result) => ctxTask.runtime.result = result;
                 for (const func of config.interceptors.after) {
-                    await func(ctx, { setResult, throwError });
+                    await func(ctxTask, { setResult, throwError });
                 }
-                return res;
+                if (ctxTask.runtime.result === EMPTY) {
+                    throw new Error("Result not set");
+                }
+                return ctxTask.runtime.result;
             }
             catch (error) {
-                let res;
+                ctxTask.runtime.error = error;
                 let overrided = false;
                 const setResult = (result) => {
                     overrided = true;
-                    return (res = result);
+                    return (ctxTask.runtime.result = result);
                 };
                 for (const func of config.interceptors.onError) {
-                    await func(ctx, { setResult, throwError });
+                    await func(ctxTask, { setResult, throwError });
                 }
-                if (overrided && res !== undefined)
-                    return res;
-                throw error;
+                if (overrided && ctxTask.runtime.result !== EMPTY)
+                    return ctxTask.runtime.result;
+                throw ctxTask.runtime.error;
             }
             finally {
                 active--;
@@ -641,17 +695,20 @@ class VigorAll extends VigorStatus {
         };
         ctx.runtime.tasks = ctx.target.map(task => runTask(task));
         const settled = await Promise.allSettled(ctx.runtime.tasks);
-        ctx.runtime.result = settled.map(i => {
-            if (i.status === "fulfilled")
-                return i.value;
-            return new VigorAllError(`this request failed`, {
+        const isFailed = Symbol("FAILED");
+        ctx.runtime.result = settled.map((res, idx) => {
+            if (res.status === "fulfilled")
+                return res.value;
+            if (ctx.setting.onlySuccess)
+                return isFailed;
+            return new VigorAllError("REQUEST_FAILED", {
                 method: "request",
-                type: "request_failed",
                 data: {
-                    error: i.reason
+                    index: idx,
+                    error: res.reason
                 }
             });
-        });
+        }).filter(i => i !== isFailed);
         const setResult = (result) => ctx.runtime.result = result;
         const throwError = (error) => { throw error; };
         for (const func of config.interceptors.result) {
