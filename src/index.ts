@@ -1,20 +1,27 @@
 const VIGOR_ERROR_MESSAGES = {
-  TIMEOUT: ({ limit, attempt }: {limit: number, attempt: number}) => `Timeout: exceeded ${limit}ms (attempt: ${attempt})`,
-  EXHAUSTED: ({ maxAttempts }: { maxAttempts: number }) => `Retry exhausted: max ${maxAttempts})`,
+    TIMEOUT: ({ limit, attempt }: {limit: number, attempt: number}) => `Timeout: exceeded ${limit}ms (attempt: ${attempt})`,
+    EXHAUSTED: ({ maxAttempts }: { maxAttempts: number }) => `Retry exhausted: max ${maxAttempts})`,
 
-  INVALID_URL: ({ received }: { received: unknown }) => `Invalid URL: ${received}`,
-  INVALID_PROTOCOL: ({ expected, received }: { expected: Array<string>, received: unknown }) => `Invalid protocol: ${received} (expected ${expected.join(", ")})`,
+    INVALID_URL: ({ received }: { received: unknown }) => `Invalid URL: ${received}`,
+    INVALID_PROTOCOL: ({ expected, received }: { expected: Array<string>, received: unknown }) => `Invalid protocol: ${received} (expected ${expected.join(", ")})`,
 
-  FETCH_ERROR: ({ status, statusText, url }: { status: number, statusText: string, url: string }) => `HTTP Error: ${status} ${statusText} (url: ${url})`,
+    FETCH_ERROR: ({ status, statusText, url }: { status: number, statusText: string, url: string }) => `HTTP Error: ${status} ${statusText} (url: ${url})`,
 
-  PARSE_FAILED: ({ expected }: { expected: unknown }) => `Parse failed: expected ${expected}`,
-  INVALID_TYPE: ({ expected, received }: { expected: unknown, received: unknown }) => `Invalid parser type: ${expected}`,
-  TARGET_MISSING: () => `Target missing`,
+    PARSE_FAILED: ({ expected }: { expected: unknown }) => `Parse failed: expected ${expected}`,
+    INVALID_TYPE: ({ expected, received }: { expected: unknown, received: unknown }) => `Invalid parser type: ${expected}`,
+    TARGET_MISSING: () => `Target missing`,
 
-  REQUEST_FAILED: ({ index, error }: { index: number, error: Error }) => `Request failed at index ${index}: ${error.message}`,
-
-  UNKNOWN: () => `Unknown error`
+    REQUEST_FAILED: ({ index, error }: { index: number, error: Error }) => `Request failed at index ${index}: ${error.message}`,
+    RESULT_NOT_SET: (() => `Result was not resolved`),
+    UNKNOWN: () => `Unknown error`
 } as const;
+
+const normalizeError = (obj: unknown) => {
+    if (obj instanceof Error) {
+        throw obj;
+    }
+    throw new Error(String(obj));
+}
 
 type VigorErrorCode = keyof typeof VIGOR_ERROR_MESSAGES;
 type ErrorData<C extends VigorErrorCode> =
@@ -79,7 +86,7 @@ class VigorFetchError<C extends "FETCH_ERROR" | "INVALID_URL" | "INVALID_PROTOCO
     }
 }
 
-class VigorAllError<C extends "REQUEST_FAILED" | "TARGET_MISSING"> extends VigorError<C> {
+class VigorAllError<C extends "REQUEST_FAILED" | "TARGET_MISSING" | "RESULT_NOT_SET"> extends VigorError<C> {
     constructor(code: C, options: VigorErrorOptions<C>) {
         super(code, options)
     }
@@ -295,12 +302,6 @@ class VigorRetry<T> extends VigorStatus<VigorRetryConfig<T>> {
             }
         }
         const throwError = (error: Error) => {throw error}
-        const normalizeError = (obj: unknown) => {
-            if (obj instanceof Error) {
-                throw obj;
-            }
-            throw new Error(String(obj));
-        }
         try {
             while(ctx.runtime.attempt < ctx.setting.count) {
                 ctx.runtime.controller = new AbortController()
@@ -967,7 +968,10 @@ class VigorAll<Tasks extends readonly VigorAllTask<any>[]> extends VigorStatus<V
                     await func(ctxTask, { setResult, throwError })
                 }
                 if (ctxTask.runtime.result === EMPTY) {
-                    throw new Error("Result not set");
+                    throw new VigorAllError("RESULT_NOT_SET", {
+                        method: "request",
+                        data: undefined
+                    })
                 }
 
                 return ctxTask.runtime.result
@@ -1000,7 +1004,7 @@ class VigorAll<Tasks extends readonly VigorAllTask<any>[]> extends VigorStatus<V
                 method: "request",
                 data: {
                     index: idx,
-                    error: res.reason
+                    error: normalizeError(res.reason)
                 }
             })
         }).filter(i => i !== isFailed) as any
