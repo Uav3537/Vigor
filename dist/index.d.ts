@@ -30,6 +30,7 @@ declare const VIGOR_ERROR_MESSAGES: {
         index: number;
         error: Error;
     }) => string;
+    readonly RESULT_NOT_SET: () => string;
     readonly UNKNOWN: () => string;
 };
 type VigorErrorCode = keyof typeof VIGOR_ERROR_MESSAGES;
@@ -60,7 +61,7 @@ declare class VigorParseError<C extends "PARSE_FAILED" | "INVALID_TYPE" | "TARGE
 declare class VigorFetchError<C extends "FETCH_ERROR" | "INVALID_URL" | "INVALID_PROTOCOL"> extends VigorError<C> {
     constructor(code: C, options: VigorErrorOptions<C>);
 }
-declare class VigorAllError<C extends "REQUEST_FAILED" | "TARGET_MISSING"> extends VigorError<C> {
+declare class VigorAllError<C extends "REQUEST_FAILED" | "TARGET_MISSING" | "RESULT_NOT_SET"> extends VigorError<C> {
     constructor(code: C, options: VigorErrorOptions<C>);
 }
 declare const EMPTY: unique symbol;

@@ -11,8 +11,15 @@ const VIGOR_ERROR_MESSAGES = {
     PARSE_FAILED: ({ expected }) => `Parse failed: expected ${expected}`,
     INVALID_TYPE: ({ expected, received }) => `Invalid parser type: ${expected}`,
     TARGET_MISSING: () => `Target missing`,
-    REQUEST_FAILED: ({ index, error }) => `Request failed at index ${index}: ${error.message}`,
+    REQUEST_FAILED: ({ index, error }) => `Request failed at index ${index}: ${error?.message || "unknown"}`,
+    RESULT_NOT_SET: (() => `Result was not resolved`),
     UNKNOWN: () => `Unknown error`
+};
+const normalizeError = (obj) => {
+    if (obj instanceof Error) {
+        throw obj;
+    }
+    throw new Error(String(obj));
 };
 class VigorError extends Error {
     timestamp = new Date();
@@ -166,12 +173,6 @@ class VigorRetry extends VigorStatus {
             }
         };
         const throwError = (error) => { throw error; };
-        const normalizeError = (obj) => {
-            if (obj instanceof Error) {
-                throw obj;
-            }
-            throw new Error(String(obj));
-        };
         try {
             while (ctx.runtime.attempt < ctx.setting.count) {
                 ctx.runtime.controller = new AbortController();
@@ -671,7 +672,10 @@ class VigorAll extends VigorStatus {
                     await func(ctxTask, { setResult, throwError });
                 }
                 if (ctxTask.runtime.result === EMPTY) {
-                    throw new Error("Result not set");
+                    throw new VigorAllError("RESULT_NOT_SET", {
+                        method: "request",
+                        data: undefined
+                    });
                 }
                 return ctxTask.runtime.result;
             }
@@ -708,7 +712,7 @@ class VigorAll extends VigorStatus {
                 method: "request",
                 data: {
                     index: idx,
-                    error: res.reason
+                    error: normalizeError(res?.reason || "unknown")
                 }
             });
         }).filter(i => i !== isFailed);
