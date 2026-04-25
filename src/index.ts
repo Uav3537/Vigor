@@ -592,7 +592,7 @@ class VigorFetch<T> extends VigorStatus<VigorFetchConfig<T>> {
         })
     }
     public origin(str: string): this { return this._next({ setting: { ...this._config.setting, origin: str } }) }
-    public path(...strs: (string | string[])[]): this { return this._next({ setting: { ...this._config.setting, path: [...this._config.setting.path!, ...strs.flat()] } }) }
+    public path(...strs: (string|number | (string|number)[])[]): this { return this._next({ setting: { ...this._config.setting, path: [...this._config.setting.path!, ...strs.map(s => String(s)).flat()] } }) }
     public query(obj: object): this { return this._next({ setting: { ...this._config.setting, query: { ...this._config.setting.query, ...obj } } }) }
     public method(str: VigorFetchMethods): this { return this._next({ setting: {...this._config.setting, method: str} }) }
     public headers(obj: HeadersInit | Record<string, any>): this { return this._next({ setting: {...this._config.setting, headers: obj} }) }
@@ -763,14 +763,6 @@ class VigorFetch<T> extends VigorStatus<VigorFetchConfig<T>> {
     }
 }
 
-
-
-
-
-
-
-
-
 type VigorAllSettingsConfig = {
     concurrency: number,
     jitter: number,
@@ -850,10 +842,8 @@ type VigorAllTask<R = any> =
         R | Promise<R>;
 
 type TaskReturn<T> = T extends VigorAllTask<infer R> ? R : never ;
-
 type MapTasks<T extends readonly VigorAllTask<any>[]> = {
-    [K in keyof T]:
-    T[K] extends VigorAllTask<infer R> ? R : never;
+    [K in keyof T]: TaskReturn<T[K]>
 }
 
 type VigorAllConfig<Tasks extends readonly VigorAllTask<any>[]> = {
@@ -1015,7 +1005,7 @@ class VigorAll<Tasks extends readonly VigorAllTask<any>[]> extends VigorStatus<V
         for (const func of config.interceptors.result) {
             await func(ctx as any, { setResult, throwError })
         }
-        return ctx.runtime.result as any
+        return ctx.runtime.result as MapTasks<Tasks>
     }
 }
 
@@ -1072,7 +1062,7 @@ class Vigor  {
             },
 
             VigorAll: {
-                main: () => new VigorAll<any>(),
+                main: <T extends readonly VigorAllTask<any>[]>() => new VigorAll<T>(),
                 error: VigorAllError,
                 setting: VigorAllSettings,
                 interceptors: VigorAllInterceptors,
@@ -1089,14 +1079,12 @@ class Vigor  {
         return this.registry.VigorFetch.main().origin(origin);
     }
 
-    public all<T extends VigorAllTask<any>[] | readonly VigorAllTask<any>[]>(
-        ...args: T extends any ? (T[number] | T)[] : never
-    ) {
-        const flatTasks = args.flat() as VigorAllTask<any>[];
-
+    public all<const T extends readonly VigorAllTask<any>[]>(
+        ...tasks: T
+    ): VigorAll<T> {
         return this.registry.VigorAll
             .main()
-            .target(...flatTasks);
+            .target(...tasks);
     }
     public parse(response: Response) {
         return this.registry.VigorParse.main().target(response);

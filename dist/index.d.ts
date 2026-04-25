@@ -285,7 +285,7 @@ type VigorFetchContext<T> = VigorFetchConfig<T> & {
 declare class VigorFetch<T> extends VigorStatus<VigorFetchConfig<T>> {
     constructor(config?: Partial<VigorFetchConfig<T>>);
     origin(str: string): this;
-    path(...strs: (string | string[])[]): this;
+    path(...strs: (string | number | (string | number)[])[]): this;
     query(obj: object): this;
     method(str: VigorFetchMethods): this;
     headers(obj: HeadersInit | Record<string, any>): this;
@@ -350,7 +350,7 @@ type VigorAllOptionsTask = {
 type VigorAllTask<R = any> = (ctx: VigorAllTaskContext<any>, obj: VigorAllOptionsTask) => R | Promise<R>;
 type TaskReturn<T> = T extends VigorAllTask<infer R> ? R : never;
 type MapTasks<T extends readonly VigorAllTask<any>[]> = {
-    [K in keyof T]: T[K] extends VigorAllTask<infer R> ? R : never;
+    [K in keyof T]: TaskReturn<T[K]>;
 };
 type VigorAllConfig<Tasks extends readonly VigorAllTask<any>[]> = {
     target: Tasks;
@@ -415,7 +415,7 @@ declare class Vigor {
     private readonly registry;
     constructor(config?: Partial<VigorConfig>);
     fetch(origin: string): VigorFetch<unknown>;
-    all<T extends VigorAllTask<any>[] | readonly VigorAllTask<any>[]>(...args: T extends any ? (T[number] | T)[] : never): VigorAll<VigorAllTask<any>[]>;
+    all<const T extends readonly VigorAllTask<any>[]>(...tasks: T): VigorAll<T>;
     parse(response: Response): VigorParse<unknown, false>;
     retry<T>(fn: VigorRetryTask<T>): VigorRetry<T>;
     use(plugin: (ctx: VigorRegistry, options?: object) => void, options?: object): Vigor;

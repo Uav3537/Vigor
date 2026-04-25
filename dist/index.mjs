@@ -388,7 +388,7 @@ class VigorFetch extends VigorStatus {
         });
     }
     origin(str) { return this._next({ setting: { ...this._config.setting, origin: str } }); }
-    path(...strs) { return this._next({ setting: { ...this._config.setting, path: [...this._config.setting.path, ...strs.flat()] } }); }
+    path(...strs) { return this._next({ setting: { ...this._config.setting, path: [...this._config.setting.path, ...strs.map(s => String(s)).flat()] } }); }
     query(obj) { return this._next({ setting: { ...this._config.setting, query: { ...this._config.setting.query, ...obj } } }); }
     method(str) { return this._next({ setting: { ...this._config.setting, method: str } }); }
     headers(obj) { return this._next({ setting: { ...this._config.setting, headers: obj } }); }
@@ -750,11 +750,10 @@ class Vigor {
     fetch(origin) {
         return this.registry.VigorFetch.main().origin(origin);
     }
-    all(...args) {
-        const flatTasks = args.flat();
+    all(...tasks) {
         return this.registry.VigorAll
             .main()
-            .target(...flatTasks);
+            .target(...tasks);
     }
     parse(response) {
         return this.registry.VigorParse.main().target(response);
