@@ -11,7 +11,7 @@ const VIGOR_ERROR_MESSAGES = {
     INVALID_TYPE: ({ expected, received }: { expected: unknown, received: unknown }) => `Invalid parser type: ${expected}`,
     TARGET_MISSING: () => `Target missing`,
 
-    REQUEST_FAILED: ({ index, error }: { index: number, error: Error }) => `Request failed at index ${index}: ${error.message}`,
+    REQUEST_FAILED: ({ index, error }: { index: number, error: Error }) => `Request failed at index ${index}: ${error?.message || "unknown"}`,
     RESULT_NOT_SET: (() => `Result was not resolved`),
     UNKNOWN: () => `Unknown error`
 } as const;
