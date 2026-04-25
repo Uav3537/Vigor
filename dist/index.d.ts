@@ -378,6 +378,7 @@ type VigorAllTaskContext<Task extends VigorAllTask<any>> = {
 declare class VigorAll<Tasks extends readonly VigorAllTask<any>[]> extends VigorStatus<VigorAllConfig<Tasks>> {
     constructor(config?: Partial<VigorAllConfig<Tasks>>);
     private _transfer;
+    target<T extends readonly VigorAllTask<any>[]>(funcs: T): VigorAll<T>;
     target<T extends readonly VigorAllTask<any>[]>(...funcs: T): VigorAll<T>;
     setting(func: (r: VigorAllSettings) => VigorAllSettings): this;
     interceptors(func: (r: VigorAllInterceptors) => VigorAllInterceptors): this;

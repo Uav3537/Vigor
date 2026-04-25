@@ -601,10 +601,9 @@ class VigorAll extends VigorStatus {
             ...config
         });
     }
-    target(...funcs) {
-        return this._transfer({
-            target: funcs
-        });
+    target(...args) {
+        const flat = args.flat();
+        return this._transfer({ target: flat });
     }
     setting(func) {
         return this._next({

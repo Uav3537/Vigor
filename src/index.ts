@@ -889,11 +889,16 @@ class VigorAll<Tasks extends readonly VigorAllTask<any>[]> extends VigorStatus<V
         })
     }
     public target<T extends readonly VigorAllTask<any>[]>(
+        funcs: T
+    ): VigorAll<T>
+
+    public target<T extends readonly VigorAllTask<any>[]>(
         ...funcs: T
-        ): VigorAll<T> {
-        return this._transfer<T>({
-            target: funcs
-        })
+        ): VigorAll<T>
+
+        public target(...args: any[]) {
+        const flat = args.flat()
+        return this._transfer({ target: flat })
     }
     public setting(func: (r: VigorAllSettings) => VigorAllSettings): this {
         return this._next({
