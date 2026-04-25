@@ -1004,7 +1004,7 @@ class VigorAll<Tasks extends readonly VigorAllTask<any>[]> extends VigorStatus<V
                 method: "request",
                 data: {
                     index: idx,
-                    error: normalizeError(res.reason)
+                    error: normalizeError(res?.reason || "unknown")
                 }
             })
         }).filter(i => i !== isFailed) as any
