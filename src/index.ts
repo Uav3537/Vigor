@@ -724,7 +724,7 @@ class VigorFetch<T> extends VigorStatus<VigorFetchConfig<T>> {
                     let rHeader: string | null = null;
                     ctx.setting.retryHeaders!.some(h => (rHeader = result.headers.get(h)));
                     if(rHeader) {
-                        setDelay?.(isNaN(Number(rHeader)) ? new Date(rHeader).getTime() - Date.now() : Number(rHeader) * 1000)
+                        setDelay?.(isNaN(Number(rHeader)) ? new Date(rHeader).getTime() - Date.now() : Number(rHeader) * 1000) + VigorRetryBackoff.randomJitter(ctx.retryConfig.backoff.jitter)
                     }
                 }
             }
