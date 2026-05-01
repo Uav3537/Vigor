@@ -449,7 +449,16 @@ class VigorParse<T, O extends boolean = false> extends VigorStatus<VigorParseCon
         try {
             if(config.type) {
                 strategy = {type: config.type}
-                const parser = config.target[config.type]
+                const parserRaw = config.target[config.type]
+                if(typeof parserRaw !== 'function') throw new VigorParseError("INVALID_TYPE", {
+                    method: "request",
+                    type: "invalid_method",
+                    data: {
+                        received: config.type,
+                        expected: strategy?.type ?? "unknown"
+                    }
+                })
+                const parser = parserRaw.bind(config.target)
                 if(!parser || typeof parser !== 'function') throw new VigorParseError("PARSE_FAILED", {
                     method: "request",
                     type: "parse_failed",

@@ -320,7 +320,17 @@ class VigorParse extends VigorStatus {
         try {
             if (config.type) {
                 strategy = { type: config.type };
-                const parser = config.target[config.type];
+                const parserRaw = config.target[config.type];
+                if (typeof parserRaw !== 'function')
+                    throw new VigorParseError("INVALID_TYPE", {
+                        method: "request",
+                        type: "invalid_method",
+                        data: {
+                            received: config.type,
+                            expected: strategy?.type ?? "unknown"
+                        }
+                    });
+                const parser = parserRaw.bind(config.target);
                 if (!parser || typeof parser !== 'function')
                     throw new VigorParseError("PARSE_FAILED", {
                         method: "request",
@@ -522,7 +532,7 @@ class VigorFetch extends VigorStatus {
                     let rHeader = null;
                     ctx.setting.retryHeaders.some(h => (rHeader = result.headers.get(h)));
                     if (rHeader) {
-                        setDelay?.(isNaN(Number(rHeader)) ? new Date(rHeader).getTime() - Date.now() : Number(rHeader) * 1000);
+                        setDelay?.(isNaN(Number(rHeader)) ? new Date(rHeader).getTime() - Date.now() : Number(rHeader) * 1000) + VigorRetryBackoff.randomJitter(ctx.retryConfig.backoff.jitter);
                     }
                 }
             };
