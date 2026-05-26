@@ -1,7 +1,8 @@
 # vigor-fetch
 
-**Vigor** is a lightweight (minified + gzipped ~10kb) TypeScript HTTP / Retry utility library.  
-Vigor provides a fluent, chainable API for building robust network logic with built-in retry, backoff, interceptors, parsing, and concurrency control.
+## Vigor is a composable, lightweighted (gzipped ~10kb) network workflow toolkit built on top of native Fetch.
+
+> Vigor provides a fluent, chainable API for building robust network logic with built-in retry, backoff, interceptors, parsing, and concurrency control.
 
 ---
 
@@ -16,451 +17,1144 @@ Vigor provides a fluent, chainable API for building robust network logic with bu
 - 🪝 **Powerful Interceptors** — Lifecycle hooks for full control flow
 - 🧠 **TypeScript First** — Fully typed inference across all modules
 
-
 ---
-
 
 ## Installation
 
 ```bash
-npm install vigor-fetch
+
+npm  install  vigor-fetch
+
 ```
 
 ## Why Vigor?
- 
-| Feature | Vigor | native fetch | ky | axios |
+
+| Feature | Vigor | Axios | Ky | Got |
 |---|:---:|:---:|:---:|:---:|
-| Zero dependencies | ✅ | ✅ | ❌ | ✅ |
-| 429 rate-limit handling | ✅ | ❌ | ✅(manual/config-based) | ❌ |
-| Retry with jitter | ✅ | ❌ | ✅ | ❌ |
-| Exponential backoff | ✅ | ❌ | ✅ | ❌ |
-| Auto response parsing | ✅ | ❌ | ✅ | ✅ |
-| Fluent chaining API | ✅ | ❌ | ✅ | ❌ |
-| Concurrency control | ✅ | ❌ | ❌ | ❌ |
-| Lifecycle interceptors | ✅ | ❌ | partial | ✅ |
-| Plugin system | ✅ | ❌ | ❌ | ❌ |
+| Runtime | Browser + Node | Browser + Node | Browser + Node | Primarily Node.js |
+| Built on Fetch | ✅ Native Fetch-based | ❌ Custom adapter-based | ✅ | ❌ |
+| Immutable Fluent Builder | ✅ | ❌ | ⚠️ Partial | ⚠️ Partial |
+| Built-in Retry Engine | ✅ Advanced | ⚠️ Limited | ✅ | ✅ |
+| Custom Retry Algorithms | ✅ | ❌ | ⚠️ Limited | ⚠️ Limited |
+| Retry Interceptors | ✅ | ❌ | ❌ | ❌ |
+| Automatic RateLimit Handling (`429`) | ✅ | ❌ | ⚠️ Partial | ✅ |
+| Automatic Content-Type Parsing | ✅ | ⚠️ Mostly JSON | ✅ | ✅ |
+| Standalone Parse Engine | ✅ | ❌ | ❌ | ❌ |
+| Custom Parsing Strategies | ✅ | ❌ | ❌ | ⚠️ Hook-level |
+| Lifecycle Interceptors | ✅ Full lifecycle | ✅ | ⚠️ Hook-based | ✅ Hook-based |
+| Concurrency Queue Engine | ✅ | ❌ | ❌ | ❌ |
+| Default Fallback Values | ✅ | ❌ | ❌ | ❌ |
 
 ## Quick Start
 
+### Fetch
+```ts  
+import vigor from "vigor-fetch";  
+
+const data = await vigor  
+	.fetch("https://api.example.com", "api")  
+	.path("v1", "main")  
+	.request();  
+// -> https://api.example.com/api/v1/main
+```
+#### Advanced
 ```ts
-import vigor from "vigor-fetch";
 const data = await vigor
   .fetch("https://api.example.com")
-  .path("api", "v1", "main")
-  .request()
-```
-
-# 🛠️ Vigor API Reference
-
-
----
-
-
-# 📡 vigor.fetch(origin)
-
-vigor.fetch(origin: string)
-
-## Chain Methods
-
-| Method | Type | Description |
-|--------|------|-------------|
-| origin | (string) => VigorFetch | Set base URL |
-| path | (...string[]) => VigorFetch | Append URL path segments |
-| query | (object) => VigorFetch | Set query parameters |
-| method | (VigorFetchMethods) => VigorFetch | Set HTTP method |
-| headers | (HeadersInit) => VigorFetch | Set request headers |
-| body | (any) => VigorFetch | Set request body |
-| options | (object) => VigorFetch | Merge fetch options |
-| setting | (fn: (s: VigorFetchSettings) => VigorFetchSettings) => VigorFetch | Settings pipeline |
-| retryConfig | (fn: (r: VigorRetry) => VigorRetry) => VigorFetch | Retry engine config |
-| parseConfig | (fn: (p: VigorParse) => VigorParse) => VigorFetch | Response parser config |
-| interceptors | (fn: (i: VigorFetchInterceptors) => VigorFetchInterceptors) => VigorFetch | Lifecycle hooks |
-| request | () => Promise<T> | Execute request |
-
-
----
-
-
-## ⚙️ fetch().setting(s => s)
-
-| Field | Type | Description |
-|------|------|-------------|
-| origin | string | Base URL |
-| path | string[] | URL segments |
-| query | object | Query params |
-| unretry | number[] | Non-retry status codes |
-| retryHeaders | string[] | Retry-related headers |
-| method | string | HTTP method |
-| headers | object | Request headers |
-| body | any | Request body |
-| options | object | Fetch options |
-| default | T | Fallback value |
-
-
----
-
-
-## 🧩 fetch().interceptors(i => i)
-
-| Hook | Signature | Description |
-|------|----------|-------------|
-| before | (ctx, { setOptions, throwError }) => void | Before request |
-| after | (ctx, { throwError }) => void | After success |
-| onError | (ctx, { setResult, throwError }) => void | Error handler |
-| result | (ctx, { setResult, throwError }) => void | Final result hook |
-
-
----
-
-
-# 🔁 vigor.retry(task)
-
-vigor.retry(task: VigorRetryTask<T>)
-
-## Methods
-
-| Method | Type | Description |
-|--------|------|-------------|
-| target | (fn: VigorRetryTask<T>) => VigorRetry | Set retry function |
-| setting | (fn: (s: VigorRetrySettings) => VigorRetrySettings) => VigorRetry | Retry settings |
-| backoff | (fn: (b: VigorRetryBackoff) => VigorRetryBackoff) => VigorRetry | Backoff strategy |
-| interceptors | (fn: (i: VigorRetryInterceptors) => VigorRetryInterceptors) => VigorRetry | Lifecycle hooks |
-| request | () => Promise<T> | Execute retry flow |
-| createController | () => (error: Error) => void | Abort controller |
-
-
----
-
-
-## ⚙️ retry().setting(s => s)
-
-| Field | Type | Description |
-|------|------|-------------|
-| count | number | Max retry attempts |
-| limit | number | Timeout per attempt |
-| maxDelay | number | Max delay cap |
-| default | T | Fallback value |
-
-
----
-
-
-## 📈 retry().backoff(b => b)
-
-| Field | Type | Description |
-|------|------|-------------|
-| initialDelay | number | Initial delay |
-| baseDelay | number | Base delay |
-| factor | number | Exponential multiplier |
-| jitter | number | Random noise |
-
-
----
-
-
-## 🧩 retry().interceptors(i => i)
-
-| Hook | Signature | Description |
-|------|----------|-------------|
-| before | (ctx, { setAttempt, throwError, abort }) => void | Before execution |
-| after | (ctx, { setAttempt, setResult, throwError }) => void | After success |
-| onError | (ctx, { setResult, throwError }) => void | Error handling |
-| onRetry | (ctx, { setDelay }) => void | Retry event |
-| retryIf | (ctx, { proceedRetry, cancelRetry }) => void | Retry decision |
-
-
----
-
-
-# ⚡ vigor.all(tasks)
-
-vigor.all(tasks: VigorAllTask<T>[])
-
-## Methods
-
-| Method | Type | Description |
-|--------|------|-------------|
-| target | (...tasks) => VigorAll | Set tasks |
-| setting | (fn: (s: VigorAllSettings) => VigorAllSettings) => VigorAll | Concurrency config |
-| interceptors | (fn: (i: VigorAllInterceptors) => VigorAllInterceptors) => VigorAll | Hooks |
-| request | () => Promise<Array<T | Error>> | Execute all tasks |
-
-
----
-
-
-## ⚙️ all().setting(s => s)
-
-| Field | Type | Description |
-|------|------|-------------|
-| concurrency | number | Max parallel tasks |
-| jitter | number | Delay randomness |
-| onlySuccess | boolean | Filters Success |
-
-
----
-
-
-## 🧩 all().interceptors(i => i)
-
-| Hook | Signature | Description |
-|------|----------|-------------|
-| before | (ctx) => void | Before each task |
-| after | (ctx, { setResult }) => void | After success |
-| onError | (ctx, { setResult }) => void | Error handling |
-| result | (ctx, { setResult }) => void | Final aggregation |
-
-
----
-
-
-# 🧪 vigor.parse(response)
-
-vigor.parse(response: Response)
-
-| Method | Type | Description |
-|--------|------|-------------|
-| target | Response | Set response |
-| original | boolean | Return raw response |
-| type | keyof Response | Force parse type |
-| request | () => Promise<T> | Execute parsing |
-
-
----
-
-
-# 🚀 vigor.fetch examples
-
-## GET request
-```ts
-vigor.fetch("https://api.example.com")
-  .path("users", "profile")
-  .query({ id: 123 })
-  .method("GET")
-  .request()
-```
----
-
-## POST request
-```ts
-vigor.fetch("https://api.example.com")
   .path("users")
-  .method("POST")
-  .headers({
-    Authorization: "Bearer TOKEN"
-  })
-  .body({
-    name: "John",
-    age: 30
-  })
-  .request()
+  .retryConfig(r => r
+	  .settings(s => s.attempt(5))
+  )
+  .parseConfig(p => p
+  .strategies(s => s.sniff())
+  )
+  .interceptors(i => i
+	  .onError((ctx, api) => {
+	      api.retry();
+	   })
+  )
+  .request();
 ```
+
+### Retry
+```ts
+import vigor from "vigor-fetch";
+
+const data = await vigor
+	.retry(async(ctx, {signal, abort}) => {
+		return await db.select(~)
+	})
+	.request()
+```
+
+### Parse
+```ts  
+import vigor from "vigor-fetch";  
+  
+const response = await fetch("https://api.example.com");  
+const data = await vigor  
+	.parse(response)  
+	.request();  
+```
+
+### Concurrency  
+```ts  
+import vigor from "vigor-fetch";  
+  
+const data = await vigor  
+	.all(  
+		async () => fetch("/api/1"),  
+		async () => fetch("/api/2")  
+	)  
+	.request();  
+```
+
+## vigor.retry  
+  
+### Methods  
+  
+| Method | Description |  
+|---|---|  
+| target(fn) | Sets retry target function |  
+| settings(fn \| config) | Configures retry settings |  
+| interceptors(fn \| config) | Configures retry interceptors |  
+| algorithms(fn) | Configures retry delay algorithm |  
+| abortSignals(...signals) | Attaches external AbortSignals |  
+| request(config?) | Executes retry pipeline |  
+  
+---  
+  
+### target  
+  
+Sets the retry target.  
+  
+```ts  
+vigor.retry(async () => {  
+	return await fetch("/api");  
+})  
+```  
+  
+---  
+  
+### settings  
+  
+Configures retry behavior.  
+  
+```ts  
+.settings(s => s  
+	.attempt(10)  
+	.timeout(5000)  
+	.jitter(1000)  
+)
+```  
+  
+#### Settings API  
+  
+| Method | Description | Default |  
+|---|---|---|  
+| attempt(number) | Maximum retry attempts | `5` |  
+| timeout(ms) | Timeout per attempt | `20000` |  
+| jitter(ms) | Random retry jitter | `1000` |  
+| default(value) | Fallback return value | `throws` |  
+  
+---  
+  
+### algorithms  
+  
+Configures retry delay algorithm.  
+  
+```ts  
+.algorithms(a => a
+	.backoff()  
+	.initial(1000)  
+	.multiplier(2)  
+)  
+```  
+  
+---  
+  
+## Retry Algorithms  
+  
+### constant  
+  
+Fixed retry delay.  
+  
+```ts  
+.algorithms(a => a
+	.constant()  
+	.interval(2000)  
+)  
+```  
+  
+#### API  
+  
+| Method | Description |  
+|---|---|  
+| interval(ms) | Fixed retry interval |  
+  
+---  
+  
+### linear  
+  
+Linearly increasing delay.  
+  
+```ts  
+.algorithms(a => a
+	.linear()  
+	.initial(1000)  
+	.increment(1000)  
+)  
+```  
+  
+#### API  
+  
+| Method | Description |  
+|---|---|  
+| initial(ms) | Initial delay |  
+| increment(ms) | Delay increment |  
+| minDelay(ms) | Minimum delay |  
+| maxDelay(ms) | Maximum delay |  
+  
+---  
+  
+### backoff  
+  
+Exponential backoff delay.  
+  
+```ts  
+.algorithms(a => a
+	.backoff()  
+	.initial(1000)  
+	.multiplier(1.7)  
+)  
+```  
+  
+#### API  
+  
+| Method | Description |  
+|---|---|  
+| initial(ms) | Initial delay |  
+| multiplier(number) | Exponential multiplier |  
+| unit(ms) | Delay unit |  
+| minDelay(ms) | Minimum delay |  
+| maxDelay(ms) | Maximum delay |  
+  
+---  
+  
+### custom  
+  
+Fully custom retry algorithm.  
+  
+```ts  
+.algorithms(a => a
+	.custom()  
+	.func(attempt => {  
+		return attempt * 3000;  
+	})  
+)  
+```  
+  
+#### API  
+  
+| Method | Description |  
+|---|---|  
+| func(fn) | Custom delay calculator |  
+  
+---  
+  
+### abortSignals  
+  
+Attaches external AbortSignals.  
+  
+```ts  
+const controller = new AbortController();  
+  
+await vigor  
+	.retry(task)  
+	.abortSignals(controller.signal)  
+	.request();  
+```  
+  
+---  
+  
+### request  
+  
+Executes retry workflow.  
+  
+```ts  
+const result = await vigor  
+	.retry(task)  
+	.request();  
+```  
+  
+---  
+  
+## Interceptors  
+  
+| Name | API |  
+|---|:---:|  
+| before | throwError / breakRetry / abort |  
+| after | setResult / throwError / breakRetry |  
+| result | setResult / throwError |  
+| retryIf | proceedRetry / cancelRetry |  
+| onRetry | throwError / setDelay / setAttempt |  
+| onError | setResult / throwError / restart |  
+  
+---  
+  
+### before  
+  
+Runs before each retry attempt.  
+  
+```ts  
+.before(async (ctx, api) => {  
+	console.log(ctx.attempt);  
+})  
+```  
+  
+#### Available APIs  
+  
+| API | Description |  
+|---|---|  
+| throwError(error) | Immediately throws an error |  
+| breakRetry(error) | Stops retry loop immediately |  
+| abort(error) | Aborts current request |  
+  
+---  
+  
+### after  
+  
+Runs after successful task execution.  
+  
+```ts  
+.after(async (ctx, api) => {  
+	api.setResult({  
+		wrapped: ctx.result  
+	});  
+})  
+```  
+  
+#### Available APIs  
+  
+| API | Description |  
+|---|---|  
+| setResult(value) | Replaces current result |  
+| throwError(error) | Throws an error |  
+| breakRetry(error) | Stops retry loop |  
+  
+---  
+  
+### result  
+  
+Runs before returning final result.  
+  
+```ts  
+.result(async (ctx, api) => {  
+	api.setResult(transform(ctx.result));  
+})  
+```  
+  
+#### Available APIs  
+  
+| API | Description |  
+|---|---|  
+| setResult(value) | Replaces current result |  
+| throwError(error) | Throws an error |  
+  
+---  
+  
+### retryIf  
+  
+Controls retry continuation.  
+  
+```ts  
+.retryIf(async (ctx, api) => {  
+	if (ctx.error instanceof TypeError) {  
+		api.proceedRetry();  
+	}  
+	else {  
+		api.cancelRetry();  
+	}  
+})  
+```  
+  
+#### Available APIs  
+  
+| API | Description |  
+|---|---|  
+| proceedRetry() | Continues retry |  
+| cancelRetry() | Cancels retry |  
+  
+---  
+  
+### onRetry  
+  
+Runs before retry delay.  
+  
+```ts  
+.onRetry(async (ctx, api) => {  
+	api.setDelay(5000);  
+})  
+```  
+  
+#### Available APIs  
+  
+| API | Description |  
+|---|---|  
+| throwError(error) | Throws an error |  
+| setDelay(ms) | Overrides retry delay |  
+| setAttempt(num) | Overrides attempt count |  
+  
+---  
+  
+### onError  
+  
+Runs after retry exhaustion.  
+  
+```ts  
+.onError(async (ctx, api) => {  
+	console.error(ctx.error);  
+	api.restart();  
+})  
+```  
+  
+#### Available APIs  
+  
+| API | Description |  
+|---|---|  
+| setResult(value) | Returns fallback value |  
+| throwError(error) | Throws an error |  
+| restart() | Restarts retry pipeline |  
+  
 ---
 
-## fetch + retry + backoff + parse
-```ts
-vigor.fetch("https://api.example.com")
-  .path("data")
-  .retryConfig(r =>
-    r
-      .setting(s =>
-        s
-          .count(3)
-          .limit(5000)
-      )
-      .backoff(b =>
-        b
-          .factor(2)
-          .jitter(300)
-      )
-  )
-  .parseConfig(p =>
-    p.original(false)
-  )
-  .request()
-```
+## vigor.parse
+
+### Methods
+
+| Method | Description |
+|---|---|
+| target(response) | Sets target Response object |
+| settings(fn \| config) | Configures parser settings |
+| strategies(fn) | Configures parser strategies |
+| parsers(fn \| config) | Registers custom parsers |
+| interceptors(fn \| config) | Configures parser interceptors |
+| request(config?) | Executes parse pipeline |
+
 ---
 
-# 🔁 vigor.retry examples
+### target
 
-## basic retry
+Sets the target `Response`.
+
 ```ts
-vigor.retry(async (ctx, { signal }) => {
-  const res = await fetch("https://api.example.com/data", { signal })
-  if (!res.ok) throw new Error("failed")
-  return res.json()
-})
-.setting(s =>
+const response = await fetch("/api");
+
+await vigor
+  .parse(response)
+  .request();
+```
+
+---
+
+### settings
+
+Configures parser behavior.
+
+```ts
+.settings(s =>
   s
-    .count(5)
-    .limit(3000)
+    .original(false)
+    .fallback(null)
 )
-.backoff(b =>
-  b
-    .baseDelay(500)
-    .factor(2)
-)
-.request()
 ```
 
+#### Settings API
+
+| Method | Description | Default |
+|---|---|---|
+| original(boolean) | Returns original Response object | `false` |
+| fallback(value) | Fallback return value on parse failure | `throws` |
 
 ---
 
+### strategies
 
-## retryIf control
+Configures parser strategy.
+
 ```ts
-vigor.retry(async () => {
-  const res = await fetch("https://api.example.com")
-  return res.json()
-})
-.interceptors(i =>
-  i.retryIf((ctx, { cancelRetry }) => {
-    const result = ctx.runtime.result
+.strategies(s =>
+  s.contentType()
+)
+```
 
-    if (result?.error === "fatal") {
-      cancelRetry()
-    }
+---
+
+## Parse Strategies
+
+### contentType
+
+Parses response using `content-type` header.
+
+```ts
+.strategies(s =>
+  s.contentType()
+)
+```
+
+Supported:
+
+- JSON
+- Text
+- Blob
+- FormData
+- ArrayBuffer
+- Audio
+- Video
+- Image
+
+---
+
+### sniff
+
+Attempts all parsers until one succeeds.
+
+```ts
+.strategies(s =>
+  s.sniff()
+)
+```
+
+Useful when:
+
+- content-type is invalid
+- server responses are inconsistent
+- APIs return malformed headers
+
+---
+
+### custom
+
+Uses custom parser strategy.
+
+```ts
+.strategies(s =>
+  s.custom()
+    .func(async ({ response, parsers }) => {
+      return await parsers.json();
+    })
+)
+```
+
+#### API
+
+| Method | Description |
+|---|---|
+| func(fn) | Custom parse resolver |
+
+---
+
+### parsers
+
+Registers custom parsers.
+
+```ts
+.parsers(p =>
+  p.add("csv", async response => {
+    return parseCSV(await response.text());
   })
 )
-.request()
 ```
 
+#### Parser API
+
+| Method | Description |
+|---|---|
+| add(name, parser) | Adds custom parser |
+| remove(name) | Removes parser |
+| clear() | Removes all parsers |
 
 ---
 
+### request
 
-## abort controller
+Executes parse workflow.
+
 ```ts
-const retry = vigor.retry(async (ctx, { signal }) => {
-  const res = await fetch("https://api.example.com", { signal })
-  return res.json()
+const result = await vigor
+  .parse(response)
+  .request();
+```
+
+---
+
+## Interceptors
+
+| Name | API |
+|---|:---:|
+| before | throwError |
+| after | setResult / throwError |
+| result | setResult / throwError |
+| onError | setResult / throwError |
+
+---
+
+### before
+
+Runs before parsing starts.
+
+```ts
+.before(async (ctx, api) => {
+  console.log(ctx.response.headers);
 })
-
-const abort = retry.createController()
-
-setTimeout(() => {
-  abort(new Error("manual abort"))
-}, 2000)
-
-await retry.request()
 ```
 
+#### Available APIs
+
+| API | Description |
+|---|---|
+| throwError(error) | Immediately throws error |
 
 ---
 
+### after
 
-# ⚡ vigor.all examples
+Runs after parser succeeds.
+
 ```ts
-vigor.all([
-  async () => fetch("https://api.com/a").then(r => r.json()),
-  async () => fetch("https://api.com/b").then(r => r.json()),
-  async () => fetch("https://api.com/c").then(r => r.json())
-]).request()
+.after(async (ctx, api) => {
+  api.setResult({
+    wrapped: ctx.result
+  });
+})
 ```
 
+#### Available APIs
+
+| API | Description |
+|---|---|
+| setResult(value) | Replaces parsed result |
+| throwError(error) | Throws error |
 
 ---
 
+### result
+
+Runs before returning final result.
 
 ```ts
-vigor.all([
-  async () => "A",
-  async () => "B",
-  async () => "C",
-  async () => "D"
-])
-.setting(s =>
-  s
-    .concurrency(2)
-    .jitter(500)
-)
-.request()
+.result(async (ctx, api) => {
+  api.setResult(transform(ctx.result));
+})
 ```
 
+#### Available APIs
+
+| API | Description |
+|---|---|
+| setResult(value) | Replaces final result |
+| throwError(error) | Throws error |
 
 ---
 
+### onError
+
+Runs when parsing fails.
 
 ```ts
-vigor.all([
-  async () => "ok1",
-  async () => { throw new Error("fail") },
-  async () => "ok2"
-]).request()
+.onError(async (ctx, api) => {
+  api.setResult(null);
+})
 ```
+
+#### Available APIs
+
+| API | Description |
+|---|---|
+| setResult(value) | Returns fallback value |
+| throwError(error) | Throws error |
 
 ---
 
-
-# 🧪 vigor.parse examples
-```ts
-const res = await fetch("https://api.com/data")
-
-vigor.parse(res).request()
-```
-
-
----
-
+## Example
 
 ```ts
-const img = await fetch("https://api.com/image.png")
+const response = await fetch("/api");
 
-vigor.parse(img)
-  .type("blob")
-  .request()
-```
-
-
----
-
-
-```ts
-const raw = await fetch("https://api.com")
-
-vigor.parse(raw)
-  .original(true)
-  .request()
-```
-
-
----
-
-
-# 🔥 full pipeline example
-```ts
-vigor.fetch("https://api.example.com")
-  .path("users")
-  .query({ page: 1 })
-  .method("GET")
-  .retryConfig(r =>
-    r
-      .setting(s =>
-        s
-          .count(3)
-          .limit(5000)
-      )
-      .backoff(b =>
-        b
-          .factor(2)
-          .jitter(200)
-      )
-      .interceptors(i =>
-        i.onRetry((ctx, { setDelay }) => {
-          setDelay(1000)
-        })
-      )
-  )
-  .parseConfig(p =>
-    p.original(false)
+const data = await vigor
+  .parse(response)
+  .strategies(s =>
+    s.sniff()
   )
   .interceptors(i =>
-    i.result(() => {
-      console.log("done")
+    i.onError((ctx, api) => {
+      console.log(ctx.error);
+
+      api.setResult(null);
     })
   )
-  .request()
+  .request();
 ```
 
+## vigor.fetch
+
+### Methods
+
+| Method | Description |
+|---|---|
+| origin(...paths) | Sets base URL and origin paths |
+| path(...paths) | Appends request paths |
+| query(params) | Sets query parameters |
+| headers(headers) | Sets request headers |
+| options(options) | Sets fetch options |
+| retryConfig(fn \| config) | Configures retry engine |
+| parseConfig(fn \| config) | Configures parse engine |
+| interceptors(fn \| config) | Configures fetch interceptors |
+| abortSignals(...signals) | Attaches external AbortSignals |
+| request(config?) | Executes fetch pipeline |
 
 ---
+
+### origin
+
+Sets base URL and origin paths.
+
+```ts
+.fetch("https://api.example.com/", "/api")
+```
+
+Produces:
+
+```txt
+https://api.example.com/api
+```
+
+---
+
+### path
+
+Appends request paths.
+
+```ts
+.path("v1", "users")
+```
+
+Produces:
+
+```txt
+https://api.example.com/api/v1/users
+```
+
+---
+
+### query
+
+Adds query parameters.
+
+```ts
+.query({
+  page: 1,
+  limit: 10
+})
+```
+
+Produces:
+
+```txt
+?page=1&limit=10
+```
+
+---
+
+### headers
+
+Sets request headers.
+
+```ts
+.headers({
+  Authorization: "Bearer token"
+})
+```
+
+---
+
+### options
+
+Sets native fetch options.
+
+```ts
+.options({
+  method: "POST",
+  body: JSON.stringify({
+    username: "john"
+  })
+})
+```
+
+---
+
+### retryConfig
+
+Configures internal retry engine.
+
+```ts
+.retryConfig(r => r
+	.settings(s => s
+		.attempt(5)
+  )
+)
+```
+
+---
+
+### parseConfig
+
+Configures internal parse engine.
+
+```ts
+.parseConfig(p => p
+	.strategies(s => s
+		.sniff()
+  )
+)
+```
+
+---
+
+### abortSignals
+
+Attaches external AbortSignals.
+
+```ts
+const controller = new AbortController();
+
+await vigor
+  .fetch("/api")
+  .abortSignals(controller.signal)
+  .request();
+```
+
+---
+
+### request
+
+Executes fetch workflow.
+
+```ts
+const data = await vigor
+  .fetch("https://api.example.com")
+  .request();
+```
+
+---
+
+## Interceptors
+
+| Name | API |
+|---|:---:|
+| before | throwError / abort |
+| after | setResponse / throwError |
+| result | setResult / throwError |
+| onError | setResult / throwError / retry |
+
+---
+
+### before
+
+Runs before fetch execution.
+
+```ts
+.before(async (ctx, api) => {
+  console.log(ctx.url);
+})
+```
+
+#### Available APIs
+
+| API | Description |
+|---|---|
+| throwError(error) | Immediately throws error |
+| abort(error) | Aborts request |
+
+---
+
+### after
+
+Runs after receiving Response.
+
+```ts
+.after(async (ctx, api) => {
+  console.log(ctx.response.status);
+})
+```
+
+#### Available APIs
+
+| API | Description |
+|---|---|
+| setResponse(response) | Replaces Response object |
+| throwError(error) | Throws error |
+
+---
+
+### result
+
+Runs before returning parsed result.
+
+```ts
+.result(async (ctx, api) => {
+  api.setResult({
+    data: ctx.result
+  });
+})
+```
+
+#### Available APIs
+
+| API | Description |
+|---|---|
+| setResult(value) | Replaces final result |
+| throwError(error) | Throws error |
+
+---
+
+### onError
+
+Runs when fetch fails.
+
+```ts
+.onError(async (ctx, api) => {
+  api.retry();
+})
+```
+
+#### Available APIs
+
+| API | Description |
+|---|---|
+| setResult(value) | Returns fallback value |
+| throwError(error) | Throws error |
+| retry() | Re-executes fetch pipeline |
+
+---
+
+## Example
+
+```ts
+const data = await vigor
+  .fetch("https://api.example.com", "api")
+  .path("v1", "users")
+  .query({
+    page: 1
+  })
+  .headers({
+    Authorization: "Bearer token"
+  })
+  .retryConfig(r =>
+    r.settings(s =>
+      s.attempt(5)
+    )
+  )
+  .request();
+```
+
+## vigor.all
+
+### Methods
+
+| Method | Description |
+|---|---|
+| target(...tasks) | Sets async task list |
+| settings(fn \| config) | Configures concurrency settings |
+| interceptors(fn \| config) | Configures concurrency interceptors |
+| abortSignals(...signals) | Attaches external AbortSignals |
+| request(config?) | Executes concurrency pipeline |
+
+---
+
+### target
+
+Sets async task list.
+
+```ts
+.all(
+  async () => fetch("/api/1"),
+  async () => fetch("/api/2")
+)
+```
+
+---
+
+### settings
+
+Configures concurrency behavior.
+
+```ts
+.settings(s => s
+    .concurrency(2)
+    .onlySuccess(true)
+)
+```
+
+#### Settings API
+
+| Method | Description | Default |
+|---|---|---|
+| concurrency(number) | Maximum concurrent tasks | `Infinity` |
+| onlySuccess(boolean) | Returns only successful results | `false` |
+| fallback(value) | Fallback return value | `throws` |
+
+---
+
+### abortSignals
+
+Attaches external AbortSignals.
+
+```ts
+const controller = new AbortController();
+
+await vigor
+  .all(task1, task2)
+  .abortSignals(controller.signal)
+  .request();
+```
+
+---
+
+### request
+
+Executes concurrency workflow.
+
+```ts
+const results = await vigor
+  .all(task1, task2)
+  .request();
+```
+
+---
+
+## Interceptors
+
+| Name | API |
+|---|:---:|
+| before | throwError / abort |
+| afterEach | setResult / throwError |
+| after | setResults / throwError |
+| result | setResults / throwError |
+| onError | setResults / throwError |
+
+---
+
+### before
+
+Runs before task execution starts.
+
+```ts
+.before(async (ctx, api) => {
+  console.log(ctx.tasks.length);
+})
+```
+
+#### Available APIs
+
+| API | Description |
+|---|---|
+| throwError(error) | Immediately throws error |
+| abort(error) | Aborts execution |
+
+---
+
+### afterEach
+
+Runs after each task resolves.
+
+```ts
+.afterEach(async (ctx, api) => {
+  console.log(ctx.result);
+})
+```
+
+#### Available APIs
+
+| API | Description |
+|---|---|
+| setResult(value) | Replaces task result |
+| throwError(error) | Throws error |
+
+---
+
+### after
+
+Runs after all tasks complete.
+
+```ts
+.after(async (ctx, api) => {
+  console.log(ctx.results);
+})
+```
+
+#### Available APIs
+
+| API | Description |
+|---|---|
+| setResults(value) | Replaces result array |
+| throwError(error) | Throws error |
+
+---
+
+### result
+
+Runs before returning final results.
+
+```ts
+.result(async (ctx, api) => {
+  api.setResults(
+    ctx.results.filter(Boolean)
+  );
+})
+```
+
+#### Available APIs
+
+| API | Description |
+|---|---|
+| setResults(value) | Replaces final results |
+| throwError(error) | Throws error |
+
+---
+
+### onError
+
+Runs when concurrency execution fails.
+
+```ts
+.onError(async (ctx, api) => {
+  api.setResults([]);
+})
+```
+
+#### Available APIs
+
+| API | Description |
+|---|---|
+| setResults(value) | Returns fallback results |
+| throwError(error) | Throws error |
+
+---
+
+## Example
+
+```ts
+const results = await vigor
+  .all(
+    async () => fetch("/api/1"),
+    async () => fetch("/api/2"),
+    async () => fetch("/api/3")
+  )
+  .settings(s =>
+    s
+      .concurrency(2)
+      .onlySuccess(true)
+  )
+  .request();
+```
