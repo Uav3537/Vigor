@@ -1,427 +1,512 @@
-declare const VIGOR_ERROR_MESSAGES: {
-    readonly TIMEOUT: ({ limit, attempt }: {
-        limit: number;
-        attempt: number;
-    }) => string;
-    readonly EXHAUSTED: ({ maxAttempts }: {
-        maxAttempts: number;
-    }) => string;
-    readonly INVALID_URL: ({ received }: {
-        received: unknown;
-    }) => string;
-    readonly INVALID_PROTOCOL: ({ expected, received }: {
+declare const VigorErrorMessageFuncs: {
+    INVALID_TARGET: ({ expected, received }: {
         expected: Array<string>;
         received: unknown;
     }) => string;
-    readonly FETCH_ERROR: ({ status, statusText, url }: {
-        status: number;
-        statusText: string;
-        url: string;
+    EXHAUSTED: ({ maxAttempts }: {
+        maxAttempts: number;
     }) => string;
-    readonly PARSE_FAILED: ({ expected }: {
-        expected: unknown;
+    TIMED_OUT: ({ limit, attempt }: {
+        limit: number;
+        attempt: number;
     }) => string;
-    readonly INVALID_TYPE: ({ expected, received }: {
-        expected: unknown;
+    INVALID_CONTENT_TYPE: ({ expected, received, response }: {
+        expected: Array<string>;
+        received: unknown;
+        response: Response;
+    }) => string;
+    PARSER_NOT_FOUND: ({ expected, received, response }: {
+        expected: Array<string>;
+        received: unknown;
+        response: Response;
+    }) => string;
+    PARSER_ALL_FAILED: ({ tried, response }: {
+        tried: Array<unknown>;
+        response: Response;
+    }) => string;
+    INVALID_PROTOCOL: ({ expected, received }: {
+        expected: Array<string>;
         received: unknown;
     }) => string;
-    readonly TARGET_MISSING: () => string;
-    readonly REQUEST_FAILED: ({ index, error }: {
-        index: number;
-        error: Error;
+    INVALID_BODY: ({ expected, received }: {
+        expected: Array<string>;
+        received: unknown;
     }) => string;
-    readonly RESULT_NOT_SET: () => string;
-    readonly UNKNOWN: () => string;
+    FETCH_FAILED: ({ status, response, url, headers, body, statusText }: {
+        status: number;
+        response: Response;
+        url: string;
+        headers: unknown;
+        body: unknown;
+        statusText: string;
+    }) => string;
+    EMPTY_TARGET: ({}: {}) => string;
 };
-type VigorErrorCode = keyof typeof VIGOR_ERROR_MESSAGES;
-type ErrorData<C extends VigorErrorCode> = Parameters<typeof VIGOR_ERROR_MESSAGES[C]> extends [infer A] ? A : undefined;
-type VigorErrorOptions<C extends VigorErrorCode> = {
-    method?: string;
+type VigorErrorCodes = keyof typeof VigorErrorMessageFuncs;
+type VigorErrorDatas<C extends VigorErrorCodes> = Parameters<typeof VigorErrorMessageFuncs[C]> extends [infer A] ? A : undefined;
+type VigorErrorOptions<C extends VigorErrorCodes, S, T> = {
     cause?: unknown;
-    context?: unknown;
-    type?: string;
-    data: ErrorData<C>;
+    data?: VigorErrorDatas<C>;
+    method: string;
+    stats?: S;
+    context?: T;
 };
-declare abstract class VigorError<C extends VigorErrorCode> extends Error {
+declare abstract class VigorError<C extends VigorErrorCodes, S, T> extends Error {
     readonly timestamp: Date;
-    readonly method?: string;
-    readonly code: C;
     readonly cause?: unknown;
-    readonly context?: unknown;
-    readonly type?: string;
-    readonly data: ErrorData<C>;
-    constructor(code: C, options: VigorErrorOptions<C>);
+    readonly code: C;
+    readonly data: VigorErrorDatas<C> | undefined;
+    readonly method: string;
+    readonly stats: S | undefined;
+    readonly context: T | undefined;
+    constructor(code: C, options: VigorErrorOptions<C, S, T>);
 }
-declare class VigorRetryError<C extends "TIMEOUT" | "EXHAUSTED"> extends VigorError<C> {
-    constructor(code: C, options: VigorErrorOptions<C>);
+declare class VigorRetryError<C extends "INVALID_TARGET" | "EXHAUSTED" | "TIMED_OUT"> extends VigorError<C, VigorRetryConfig, VigorRetryContext> {
+    constructor(code: C, options: VigorErrorOptions<C, VigorRetryConfig, VigorRetryContext>);
 }
-declare class VigorParseError<C extends "PARSE_FAILED" | "INVALID_TYPE" | "TARGET_MISSING"> extends VigorError<C> {
-    constructor(code: C, options: VigorErrorOptions<C>);
+declare class VigorParseError<C extends "INVALID_CONTENT_TYPE" | "PARSER_NOT_FOUND" | "PARSER_ALL_FAILED" | "INVALID_TARGET"> extends VigorError<C, VigorParseConfig, VigorParseContext> {
+    constructor(code: C, options: VigorErrorOptions<C, VigorParseConfig, VigorParseContext>);
 }
-declare class VigorFetchError<C extends "FETCH_ERROR" | "INVALID_URL" | "INVALID_PROTOCOL"> extends VigorError<C> {
-    constructor(code: C, options: VigorErrorOptions<C>);
+declare class VigorFetchError<C extends "INVALID_PROTOCOL" | "INVALID_BODY" | "FETCH_FAILED"> extends VigorError<C, VigorFetchConfig, VigorFetchContext> {
+    constructor(code: C, options: VigorErrorOptions<C, VigorFetchConfig, VigorFetchContext>);
 }
-declare class VigorAllError<C extends "REQUEST_FAILED" | "TARGET_MISSING" | "RESULT_NOT_SET"> extends VigorError<C> {
-    constructor(code: C, options: VigorErrorOptions<C>);
+declare class VigorAllError<C extends "EMPTY_TARGET"> extends VigorError<C, VigorAllConfig, VigorAllContext | VigorAllEachContext> {
+    constructor(code: C, options: VigorErrorOptions<C, VigorAllConfig, VigorAllContext | VigorAllEachContext>);
 }
-declare const EMPTY: unique symbol;
-declare abstract class VigorStatus<T> {
-    protected readonly _base: T;
-    protected readonly _config: T;
-    constructor(config: Partial<T>, _base: T);
-    getConfig(): T;
-    getBase(): T;
-    protected _next(config: Partial<T>): this;
-    protected _pipsub<C, R extends VigorStatus<C>>(config: C, fn: (r: R) => R, ctor: new (c: C) => R): C;
+declare abstract class VigorStatus<C, Self> {
+    protected readonly _base: C;
+    protected readonly ctor: (config: C) => Self;
+    protected readonly _config: C;
+    constructor(config: Partial<C> | undefined, _base: C, ctor: (config: C) => Self);
+    protected _mergeConfig<C>(source: any, target: C | Partial<C> | undefined): C;
+    protected _next(config: Partial<C>): Self;
+    _getConfig(): C;
+    _getBase(): C;
 }
-type VigorIncludeSpread<T> = Array<(T | Array<T>)>;
-type VigorRetrySettingsConfig<T> = {
-    count: number;
-    limit: number;
-    maxDelay: number;
-    default?: T | typeof EMPTY;
-};
-declare class VigorRetrySettings<T> extends VigorStatus<VigorRetrySettingsConfig<T>> {
-    constructor(config?: Partial<VigorRetrySettingsConfig<T>>);
-    count(num: number): this;
-    limit(num: number): this;
-    maxDelay(num: number): this;
-    default(obj: T): this;
-}
-type VigorRetryBackoffConfig<T> = {
-    initialDelay: number;
-    baseDelay: number;
-    factor: number;
+type VigorIncludeSpread<T> = Array<T | Array<T>>;
+type VigorRetrySettingsConfig = {
+    default: unknown;
+    timeout: number;
+    attempt: number;
     jitter: number;
 };
-declare class VigorRetryBackoff<T> extends VigorStatus<VigorRetryBackoffConfig<T>> {
-    constructor(config?: Partial<VigorRetryBackoffConfig<T>>);
-    initialDelay(num: number): this;
-    baseDelay(num: number): this;
-    factor(num: number): this;
-    jitter(num: number): this;
-    static randomJitter(num: number): number;
+declare class VigorRetrySettings extends VigorStatus<VigorRetrySettingsConfig, VigorRetrySettings> {
+    constructor(config?: Partial<VigorRetrySettingsConfig>);
+    default(unk: VigorRetrySettingsConfig["default"]): VigorRetrySettings;
+    timeout(num: VigorRetrySettingsConfig["timeout"]): VigorRetrySettings;
+    attempt(num: VigorRetrySettingsConfig["attempt"]): VigorRetrySettings;
+    jitter(num: VigorRetrySettingsConfig["jitter"]): VigorRetrySettings;
 }
-type VigorRetryBefore<T> = {
-    setAttempt: (attempt: number) => number;
-    throwError: (error: Error) => void;
-    abort: (error: Error) => void;
+type VigorRetryInterceptorsConfig = {
+    before: Array<VigorRetryInterceptorsFunctions["before"]>;
+    after: Array<VigorRetryInterceptorsFunctions["after"]>;
+    result: Array<VigorRetryInterceptorsFunctions["result"]>;
+    retryIf: Array<VigorRetryInterceptorsFunctions["retryIf"]>;
+    onRetry: Array<VigorRetryInterceptorsFunctions["onRetry"]>;
+    onError: Array<VigorRetryInterceptorsFunctions["onError"]>;
 };
-type VigorRetryAfter<T> = {
-    setAttempt: (attempt: number) => number;
-    throwError: (error: Error) => void;
-    setResult: (result: T) => T;
-};
-type VigorRetryRetryIf<T> = {
-    throwError: (error: Error) => void;
-    proceedRetry: () => boolean;
-    cancelRetry: (error?: Error) => boolean;
-};
-type VigorRetryOnRetry<T> = {
-    setAttempt: (attempt: number) => number;
-    throwError: (error: Error) => void;
-    setDelay: (delay: number) => number;
-};
-type VigorRetryOnError<T> = {
-    setResult: (result: T) => T;
-    throwError: (error: Error) => void;
-};
-type VigorRetryFn<T, O> = (ctx: VigorRetryContext<T>, obj: O) => void | any | Promise<void | any>;
-type VigorRetryBeforeFn<T> = VigorRetryFn<T, VigorRetryBefore<T>>;
-type VigorRetryAfterFn<T> = VigorRetryFn<T, VigorRetryAfter<T>>;
-type VigorRetryOnErrorFn<T> = VigorRetryFn<T, VigorRetryOnError<T>>;
-type VigorRetryOnRetryFn<T> = VigorRetryFn<T, VigorRetryOnRetry<T>>;
-type VigorRetryRetryIfFn<T> = VigorRetryFn<T, VigorRetryRetryIf<T>>;
-type VigorRetryOptionsTask<T> = {
-    abort?: (error: Error) => void;
-    signal?: AbortSignal;
-};
-type VigorRetryInterceptorsConfig<T> = {
-    before: Array<VigorRetryBeforeFn<T>>;
-    after: Array<VigorRetryAfterFn<T>>;
-    onError: Array<VigorRetryOnErrorFn<T>>;
-    onRetry: Array<VigorRetryOnRetryFn<T>>;
-    retryIf: Array<VigorRetryRetryIfFn<T>>;
-};
-declare class VigorRetryInterceptors<T> extends VigorStatus<VigorRetryInterceptorsConfig<T>> {
-    constructor(config?: Partial<VigorRetryInterceptorsConfig<T>>);
-    before(...funcs: VigorIncludeSpread<VigorRetryBeforeFn<T>>): this;
-    after(...funcs: VigorIncludeSpread<VigorRetryAfterFn<T>>): this;
-    onError(...funcs: VigorIncludeSpread<VigorRetryOnErrorFn<T>>): this;
-    onRetry(...funcs: VigorIncludeSpread<VigorRetryOnRetryFn<T>>): this;
-    retryIf(...funcs: VigorIncludeSpread<VigorRetryRetryIfFn<T>>): this;
+declare class VigorRetryInterceptors extends VigorStatus<VigorRetryInterceptorsConfig, VigorRetryInterceptors> {
+    constructor(config?: Partial<VigorRetryInterceptorsConfig>);
+    before(...funcs: VigorIncludeSpread<VigorRetryInterceptorsConfig["before"][number]>): VigorRetryInterceptors;
+    after(...funcs: VigorIncludeSpread<VigorRetryInterceptorsConfig["after"][number]>): VigorRetryInterceptors;
+    result(...funcs: VigorIncludeSpread<VigorRetryInterceptorsConfig["result"][number]>): VigorRetryInterceptors;
+    retryIf(...funcs: VigorIncludeSpread<VigorRetryInterceptorsConfig["retryIf"][number]>): VigorRetryInterceptors;
+    onRetry(...funcs: VigorIncludeSpread<VigorRetryInterceptorsConfig["onRetry"][number]>): VigorRetryInterceptors;
+    onError(...funcs: VigorIncludeSpread<VigorRetryInterceptorsConfig["onError"][number]>): VigorRetryInterceptors;
 }
-type VigorRetryTask<T> = (ctx: VigorRetryContext<T>, obj: VigorRetryOptionsTask<T>) => T | Promise<T>;
-type VigorRetryConfig<T> = {
-    target: VigorRetryTask<T>;
-    setting: VigorRetrySettingsConfig<T>;
-    backoff: VigorRetryBackoffConfig<T>;
-    interceptors: VigorRetryInterceptorsConfig<T>;
-    controller: AbortController;
+type VigorRetryAlgorithmsConstantConfig = {
+    interval: number;
 };
-type VigorRetryContext<T> = VigorRetryConfig<T> & {
-    runtime: {
-        result?: T | typeof EMPTY;
-        attempt: number;
-        controller: AbortController;
-        abortPromise?: Promise<never>;
-        aborted: boolean;
+declare class VigorRetryAlgorithmsConstant extends VigorStatus<VigorRetryAlgorithmsConstantConfig, VigorRetryAlgorithmsConstant> {
+    constructor(config?: Partial<VigorRetryAlgorithmsConstantConfig>);
+    interval(num: VigorRetryAlgorithmsConstantConfig["interval"]): VigorRetryAlgorithmsConstant;
+}
+type VigorRetryAlgorithmsLinearConfig = {
+    initial: number;
+    increment: number;
+    minDelay: number;
+    maxDelay: number;
+};
+declare class VigorRetryAlgorithmsLinear extends VigorStatus<VigorRetryAlgorithmsLinearConfig, VigorRetryAlgorithmsLinear> {
+    constructor(config?: Partial<VigorRetryAlgorithmsLinearConfig>);
+    initial(num: VigorRetryAlgorithmsLinearConfig["initial"]): VigorRetryAlgorithmsLinear;
+    increment(num: VigorRetryAlgorithmsLinearConfig["increment"]): VigorRetryAlgorithmsLinear;
+    minDelay(num: VigorRetryAlgorithmsLinearConfig["minDelay"]): VigorRetryAlgorithmsLinear;
+    maxDelay(num: VigorRetryAlgorithmsLinearConfig["maxDelay"]): VigorRetryAlgorithmsLinear;
+}
+type VigorRetryAlgorithmsBackoffConfig = {
+    initial: number;
+    multiplier: number;
+    unit: number;
+    minDelay: number;
+    maxDelay: number;
+};
+declare class VigorRetryAlgorithmsBackoff extends VigorStatus<VigorRetryAlgorithmsBackoffConfig, VigorRetryAlgorithmsBackoff> {
+    constructor(config?: Partial<VigorRetryAlgorithmsBackoffConfig>);
+    initial(num: VigorRetryAlgorithmsBackoffConfig["initial"]): VigorRetryAlgorithmsBackoff;
+    multiplier(num: VigorRetryAlgorithmsBackoffConfig["multiplier"]): VigorRetryAlgorithmsBackoff;
+    unit(num: VigorRetryAlgorithmsBackoffConfig["unit"]): VigorRetryAlgorithmsBackoff;
+    minDelay(num: VigorRetryAlgorithmsBackoffConfig["minDelay"]): VigorRetryAlgorithmsBackoff;
+    maxDelay(num: VigorRetryAlgorithmsBackoffConfig["maxDelay"]): VigorRetryAlgorithmsBackoff;
+}
+type VigorRetryAlgorithmsCustomConfig = {
+    func: VigorRetryAlgorithmsConfig;
+    minDelay: number;
+    maxDelay: number;
+};
+declare class VigorRetryAlgorithmsCustom extends VigorStatus<VigorRetryAlgorithmsCustomConfig, VigorRetryAlgorithmsCustom> {
+    constructor(config?: Partial<VigorRetryAlgorithmsCustomConfig>);
+    func(num: VigorRetryAlgorithmsCustomConfig["func"]): VigorRetryAlgorithmsCustom;
+}
+type VigorRetryAlgorithmsConfig = (attempt: number) => number;
+type VigorRetryInterceptorsApi<R> = {
+    setResult: (unk: R) => R;
+    throwError: <E extends Error>(err: E) => never;
+    breakRetry: <E extends Error>(err: E) => never;
+    proceedRetry: () => true;
+    cancelRetry: () => false;
+    setDelay: <D extends number>(num: D) => D;
+    setAttempt: <A extends number>(num: A) => A;
+    restart: () => void;
+    abort: <E extends Error>(err: E) => void;
+};
+type VigorRetryInterceptorsFn<A extends keyof VigorRetryInterceptorsApi<R>, R = unknown> = (ctx: VigorRetryContext, api: Pick<VigorRetryInterceptorsApi<R>, A>) => void | Promise<void>;
+type VigorRetryInterceptorsFunctions = {
+    before: VigorRetryInterceptorsFn<"throwError" | "breakRetry" | "abort">;
+    after: VigorRetryInterceptorsFn<"setResult" | "throwError" | "breakRetry">;
+    result: VigorRetryInterceptorsFn<"setResult" | "throwError">;
+    retryIf: VigorRetryInterceptorsFn<"proceedRetry" | "cancelRetry">;
+    onRetry: VigorRetryInterceptorsFn<"throwError" | "setDelay" | "setAttempt">;
+    onError: VigorRetryInterceptorsFn<"setResult" | "throwError" | "restart">;
+};
+type VigorRetryConfig = {
+    target: (ctx: VigorRetryContext, { abort, signal }: {
+        abort: VigorRetryInterceptorsApi<any>["abort"];
         signal: AbortSignal;
-        delay: number;
-        retry: boolean;
-        error?: unknown;
-    };
+    }) => unknown | Promise<unknown>;
+    settings: VigorRetrySettingsConfig;
+    interceptors: VigorRetryInterceptorsConfig;
+    algorithm: VigorRetryAlgorithmsConfig;
+    abortSignals: Array<AbortSignal>;
 };
-declare class VigorRetry<T> extends VigorStatus<VigorRetryConfig<T>> {
-    constructor(config?: Partial<VigorRetryConfig<T>>);
-    private _transfer;
-    private _calculateDelay;
-    createController(): VigorRetryConfig<T>["controller"];
-    target<U>(func: VigorRetryConfig<U>["target"]): VigorRetry<U>;
-    setting(func: (r: VigorRetrySettings<T>) => VigorRetrySettings<T>): this;
-    backoff(func: (r: VigorRetryBackoff<T>) => VigorRetryBackoff<T>): this;
-    interceptors(func: (r: VigorRetryInterceptors<T>) => VigorRetryInterceptors<T>): this;
-    request(): Promise<T>;
-}
-type VigorParseConfig<T, O = false> = {
-    target?: Response;
-    original: O;
-    type?: (keyof Response) | undefined;
-    result?: T;
+type VigorRetryContext = {
+    result: unknown;
+    error: unknown;
+    attempt: number;
+    delay: number;
+    controller: AbortController;
+    timeline: Array<{
+        action: string;
+        content?: unknown;
+    }>;
+    stats: VigorRetryConfig;
 };
-declare class VigorParse<T, O extends boolean = false> extends VigorStatus<VigorParseConfig<T, O>> {
-    constructor(config?: Partial<VigorParseConfig<T, O> & {
-        original: O;
-    }>);
-    static stategy: {
-        key: RegExp;
-        parse: (res: Response) => Promise<any>;
-        type: string;
-    }[];
-    static supported: string[];
-    private _transfer;
-    target(res: Response): this;
-    original<B extends boolean>(bool: B): VigorParse<T, B>;
-    type<K extends keyof Response>(type: K): VigorParse<Response[K] extends (...args: any) => Promise<infer R> ? R : never, O>;
-    request<U = T>(): Promise<O extends true ? Response : U>;
+declare class VigorRetry extends VigorStatus<VigorRetryConfig, VigorRetry> {
+    constructor(config?: Partial<VigorRetryConfig>);
+    private RetryAlgorithms;
+    target(func: VigorRetryConfig["target"]): VigorRetry;
+    settings(func: ((s: VigorRetrySettings) => VigorRetrySettings) | VigorRetryConfig["settings"]): VigorRetry;
+    interceptors(func: ((i: VigorRetryInterceptors) => VigorRetryInterceptors) | VigorRetryConfig["interceptors"]): VigorRetry;
+    algorithms(func: (a: typeof this.RetryAlgorithms) => {
+        _calculateDelay: VigorRetryConfig["algorithm"];
+    }): VigorRetry;
+    abortSignals(...abortSignals: VigorIncludeSpread<AbortSignal>): VigorRetry;
+    request<R>(config?: VigorRetryConfig, timeline?: VigorRetryContext["timeline"]): Promise<R>;
 }
-type VigorFetchMethods = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" | "CONNECT" | "TRACE";
-type VigorFetchSettingsConfig<T> = {
-    origin?: string;
-    path?: Array<string>;
-    query?: object;
-    unretry?: Array<number>;
-    retryHeaders?: Array<string>;
-    method?: VigorFetchMethods;
-    headers?: HeadersInit | Record<string, any>;
+type VigorParseSettingsConfig = {
+    raw: boolean;
+    default: unknown;
+};
+declare class VigorParseSettings extends VigorStatus<VigorParseSettingsConfig, VigorParseSettings> {
+    constructor(config?: Partial<VigorParseSettingsConfig>);
+    original(bool: VigorParseSettingsConfig["raw"]): VigorParseSettings;
+    default(unk: VigorParseSettingsConfig["default"]): VigorParseSettings;
+}
+type VigorParseStrategiesConfig = {
+    funcs: Array<(response: Response) => Promise<any>>;
+};
+declare class VigorParseStrategies extends VigorStatus<VigorParseStrategiesConfig, VigorParseStrategies> {
+    constructor(config?: Partial<VigorParseStrategiesConfig>);
+    private ParseAutoHeaders;
+    private ParseAutoMethods;
+    private ParseAutoAlgorithms;
+    contentType(): VigorParseStrategies;
+    sniff(): VigorParseStrategies;
+    json(): VigorParseStrategies;
+    text(): VigorParseStrategies;
+    arrayBuffer(): VigorParseStrategies;
+    blob(): VigorParseStrategies;
+    bytes(): VigorParseStrategies;
+    formData(): VigorParseStrategies;
+}
+type VigorParseInterceptorsConfig = {
+    before: Array<VigorParseInterceptorsFunctions["before"]>;
+    after: Array<VigorParseInterceptorsFunctions["after"]>;
+    result: Array<VigorParseInterceptorsFunctions["result"]>;
+    onError: Array<VigorParseInterceptorsFunctions["onError"]>;
+};
+declare class VigorParseInterceptors extends VigorStatus<VigorParseInterceptorsConfig, VigorParseInterceptors> {
+    constructor(config?: Partial<VigorParseInterceptorsConfig>);
+    before(...funcs: VigorIncludeSpread<VigorParseInterceptorsConfig["before"][number]>): VigorParseInterceptors;
+    after(...funcs: VigorIncludeSpread<VigorParseInterceptorsConfig["after"][number]>): VigorParseInterceptors;
+    result(...funcs: VigorIncludeSpread<VigorParseInterceptorsConfig["result"][number]>): VigorParseInterceptors;
+    onError(...funcs: VigorIncludeSpread<VigorParseInterceptorsConfig["onError"][number]>): VigorParseInterceptors;
+}
+type VigorParseInterceptorsApi<R> = {
+    setResult: (unk: R) => R;
+    throwError: <E extends Error>(err: E) => never;
+};
+type VigorParseInterceptorsFn<A extends keyof VigorParseInterceptorsApi<R>, R = unknown> = (ctx: VigorParseContext, api: Pick<VigorParseInterceptorsApi<R>, A>) => void | Promise<void>;
+type VigorParseInterceptorsFunctions = {
+    before: VigorParseInterceptorsFn<"throwError">;
+    after: VigorParseInterceptorsFn<"setResult" | "throwError">;
+    result: VigorParseInterceptorsFn<"setResult" | "throwError">;
+    onError: VigorParseInterceptorsFn<"setResult" | "throwError">;
+};
+type VigorParseConfig = {
+    target: Response;
+    settings: VigorParseSettingsConfig;
+    strategies: VigorParseStrategiesConfig;
+    interceptors: VigorParseInterceptorsConfig;
+};
+type VigorParseContext = {
+    stats: VigorParseConfig;
+    timeline: Array<{
+        action: string;
+        content?: unknown;
+    }>;
+    result: unknown;
+    error: unknown;
+    response: Response;
+};
+declare class VigorParse extends VigorStatus<VigorParseConfig, VigorParse> {
+    constructor(config?: Partial<VigorParseConfig>);
+    target(response: VigorParseConfig["target"]): VigorParse;
+    settings(func: ((i: VigorParseSettings) => VigorParseSettings) | VigorParseConfig["settings"]): VigorParse;
+    strategies(func: ((i: VigorParseStrategies) => VigorParseStrategies) | VigorParseConfig["strategies"]): VigorParse;
+    interceptors(func: ((i: VigorParseInterceptors) => VigorParseInterceptors) | VigorParseConfig["interceptors"]): VigorParse;
+    request<R>(config?: VigorParseConfig, timeline?: VigorParseContext["timeline"]): Promise<R>;
+}
+type VigorFetchSettingsConfig = {
+    unretryStatus: Array<number>;
+    retryHeaders: Array<string>;
+    default: unknown;
+};
+declare class VigorFetchSettings extends VigorStatus<VigorFetchSettingsConfig, VigorFetchSettings> {
+    constructor(config?: Partial<VigorFetchSettingsConfig>);
+    retryHeaders(...strs: VigorIncludeSpread<VigorFetchSettingsConfig["retryHeaders"][number]>): VigorFetchSettings;
+    unretryStatus(...nums: VigorIncludeSpread<VigorFetchSettingsConfig["unretryStatus"][number]>): VigorFetchSettings;
+    default(unk: VigorFetchSettingsConfig["default"]): VigorFetchSettings;
+}
+type VigorFetchInterceptorsConfig = {
+    before: Array<VigorFetchInterceptorsFunctions["before"]>;
+    after: Array<VigorFetchInterceptorsFunctions["after"]>;
+    result: Array<VigorFetchInterceptorsFunctions["result"]>;
+    onError: Array<VigorFetchInterceptorsFunctions["onError"]>;
+};
+declare class VigorFetchInterceptors extends VigorStatus<VigorFetchInterceptorsConfig, VigorFetchInterceptors> {
+    constructor(config?: Partial<VigorFetchInterceptorsConfig>);
+    before(...funcs: VigorIncludeSpread<VigorFetchInterceptorsConfig["before"][number]>): VigorFetchInterceptors;
+    after(...funcs: VigorIncludeSpread<VigorFetchInterceptorsConfig["after"][number]>): VigorFetchInterceptors;
+    result(...funcs: VigorIncludeSpread<VigorFetchInterceptorsConfig["result"][number]>): VigorFetchInterceptors;
+    onError(...funcs: VigorIncludeSpread<VigorFetchInterceptorsConfig["onError"][number]>): VigorFetchInterceptors;
+}
+type VigorFetchOptions<T = Record<string, any>> = {
+    headers: HeadersInit | Record<string, any>;
     body?: XMLHttpRequestBodyInit | object | null;
-    options?: object;
-    default?: T | typeof EMPTY;
+} & T;
+type VigorFetchConfig = {
+    origin: Array<string>;
+    path: Array<string>;
+    query: Array<Record<string, VigorStringable | Array<VigorStringable>>>;
+    hash: string;
+    options: VigorFetchOptions;
+    settings: VigorFetchSettingsConfig;
+    interceptors: VigorFetchInterceptorsConfig;
+    retryConfig: VigorRetryConfig;
+    parseConfig: VigorParseConfig;
 };
-declare class VigorFetchSettings<T> extends VigorStatus<VigorFetchSettingsConfig<T>> {
-    constructor(config?: Partial<VigorFetchSettingsConfig<T>>);
-    origin(str: string): VigorFetchSettings<T>;
-    path(...strs: (string | string[])[]): VigorFetchSettings<T>;
-    query(obj: object): VigorFetchSettings<T>;
-    unretry(...numbers: (number | number[])[]): VigorFetchSettings<T>;
-    retryHeaders(...strs: (string | string[])[]): VigorFetchSettings<T>;
-    method(str: VigorFetchMethods): VigorFetchSettings<T>;
-    headers(obj: HeadersInit | Record<string, any>): VigorFetchSettings<T>;
-    body(obj: XMLHttpRequestBodyInit | object | null): VigorFetchSettings<T>;
-    options(obj: object): VigorFetchSettings<T>;
-    default(obj: T): VigorFetchSettings<T>;
-}
-type VigorFetchBefore<T> = {
-    setOptions?: (obj: object) => void;
-    throwError?: (error: Error) => void;
+type VigorFetchInterceptorsApi<R> = {
+    setResult: (unk: R) => R;
+    setOptions: (unk: VigorFetchContext["options"]) => VigorFetchContext["options"];
+    setHeaders: (unk: VigorFetchConfig["options"]["headers"]) => VigorFetchConfig["options"]["headers"];
+    setBody: (unk: VigorFetchConfig["options"]["body"]) => VigorFetchConfig["options"]["body"];
+    throwError: <E extends Error>(err: E) => never;
+    restart: () => void;
 };
-type VigorFetchAfter<T> = {
-    throwError?: (error: Error) => void;
+type VigorFetchInterceptorsFn<A extends keyof VigorFetchInterceptorsApi<R>, R = unknown> = (ctx: VigorFetchContext, api: Pick<VigorFetchInterceptorsApi<R>, A>) => void | Promise<void>;
+type VigorFetchInterceptorsFunctions = {
+    before: VigorFetchInterceptorsFn<"throwError" | "setOptions" | "setHeaders" | "setBody">;
+    after: VigorFetchInterceptorsFn<"setResult" | "throwError">;
+    result: VigorFetchInterceptorsFn<"setResult" | "throwError">;
+    onError: VigorFetchInterceptorsFn<"setResult" | "throwError" | "restart">;
 };
-type VigorFetchOnError<T> = {
-    setResult?: (result: T) => T;
-    throwError?: (error: Error) => void;
+type VigorFetchContext = {
+    href: string;
+    response: Response;
+    result: unknown;
+    error: unknown;
+    options: VigorFetchOptions;
+    timeline: Array<{
+        action: string;
+        content?: unknown;
+    }>;
+    stats: VigorFetchConfig;
 };
-type VigorFetchResult<T> = {
-    setResult?: (result: T) => T;
-    throwError?: (error: Error) => void;
-};
-type VigorFetchFn<T, O> = (ctx: VigorFetchContext<T>, obj: O) => void | any | Promise<void | any>;
-type VigorFetchBeforeFn<T> = VigorFetchFn<T, VigorFetchBefore<T>>;
-type VigorFetchAfterFn<T> = VigorFetchFn<T, VigorFetchAfter<T>>;
-type VigorFetchOnErrorFn<T> = VigorFetchFn<T, VigorFetchOnError<T>>;
-type VigorFetchResultFn<T> = VigorFetchFn<T, VigorFetchResult<T>>;
-type VigorFetchInterceptorsConfig<T> = {
-    before: VigorFetchBeforeFn<T>[];
-    after: VigorFetchAfterFn<T>[];
-    onError: VigorFetchOnErrorFn<T>[];
-    result: VigorFetchResultFn<T>[];
-};
-declare class VigorFetchInterceptors<T> extends VigorStatus<VigorFetchInterceptorsConfig<T>> {
-    constructor(config?: Partial<VigorFetchInterceptorsConfig<T>>);
-    before(...funcs: VigorIncludeSpread<VigorFetchBeforeFn<T>>): VigorFetchInterceptors<T>;
-    after(...funcs: VigorIncludeSpread<VigorFetchAfterFn<T>>): VigorFetchInterceptors<T>;
-    onError(...funcs: VigorIncludeSpread<VigorFetchOnErrorFn<T>>): VigorFetchInterceptors<T>;
-    result(...funcs: VigorIncludeSpread<VigorFetchResultFn<T>>): VigorFetchInterceptors<T>;
-}
-type VigorFetchConfig<T> = {
-    setting: VigorFetchSettingsConfig<T>;
-    retryConfig: VigorRetryConfig<T>;
-    parseConfig: VigorParseConfig<T>;
-    interceptors: VigorFetchInterceptorsConfig<T>;
-};
-type VigorFetchContext<T> = VigorFetchConfig<T> & {
-    runtime: {
-        retryEngine?: VigorRetry<T>;
-        parseEngine?: VigorParse<T>;
-        unretrySet?: Set<number>;
-        url?: string;
-        baseOptions?: object;
-        options?: object;
-        response?: Response;
-        result?: T | typeof EMPTY;
-        error?: unknown;
-    };
-};
-declare class VigorFetch<T> extends VigorStatus<VigorFetchConfig<T>> {
-    constructor(config?: Partial<VigorFetchConfig<T>>);
-    origin(str: string): this;
-    path(...strs: (string | number | (string | number)[])[]): this;
-    query(obj: object): this;
-    method(str: VigorFetchMethods): this;
-    headers(obj: HeadersInit | Record<string, any>): this;
-    body(obj: XMLHttpRequestBodyInit | object | null): this;
-    options(obj: object): this;
-    setting(func: (r: VigorFetchSettings<T>) => VigorFetchSettings<T>): this;
-    interceptors(func: (r: VigorFetchInterceptors<T>) => VigorFetchInterceptors<T>): this;
-    retryConfig(func: (r: VigorRetry<T>) => VigorRetry<T>): this;
-    parseConfig(func: (r: VigorParse<T>) => VigorParse<T>): this;
-    buildUrl(origin: string, path: string[], query: object): string;
-    request<U = T>(): Promise<U>;
+type VigorStringable = string | number | boolean | null | undefined | Date;
+declare class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
+    constructor(config?: Partial<VigorFetchConfig>);
+    private _stringifyList;
+    origin(...strs: VigorIncludeSpread<VigorStringable>): VigorFetch;
+    path(...strs: VigorIncludeSpread<VigorStringable>): VigorFetch;
+    query(...strs: VigorIncludeSpread<VigorFetchConfig["query"][number]>): VigorFetch;
+    hash(str: VigorFetchConfig["hash"]): VigorFetch;
+    options(obj: VigorFetchConfig["options"]): VigorFetch;
+    headers(obj: VigorFetchConfig["options"]["headers"]): VigorFetch;
+    body(obj: VigorFetchConfig["options"]["body"]): VigorFetch;
+    private _buildUrl;
+    private _normalizeOptions;
+    settings(func: ((s: VigorFetchSettings) => VigorFetchSettings) | VigorFetchConfig["settings"]): VigorFetch;
+    interceptors(func: ((s: VigorFetchInterceptors) => VigorFetchInterceptors) | VigorFetchConfig["interceptors"]): VigorFetch;
+    retryConfig(func: ((s: VigorRetry) => VigorRetry) | VigorFetchConfig["retryConfig"]): VigorFetch;
+    parseConfig(func: ((s: VigorParse) => VigorParse) | VigorFetchConfig["parseConfig"]): VigorFetch;
+    request<R>(config?: VigorFetchConfig, timeline?: VigorFetchContext["timeline"]): Promise<R>;
 }
 type VigorAllSettingsConfig = {
     concurrency: number;
-    jitter: number;
     onlySuccess: boolean;
 };
-declare class VigorAllSettings extends VigorStatus<VigorAllSettingsConfig> {
+declare class VigorAllSettings extends VigorStatus<VigorAllSettingsConfig, VigorAllSettings> {
     constructor(config?: Partial<VigorAllSettingsConfig>);
-    concurrency(num: number): VigorAllSettings;
-    jitter(num: number): VigorAllSettings;
-    onlySuccess(bool: boolean): VigorAllSettings;
+    concurrency(num: VigorAllSettingsConfig["concurrency"]): VigorAllSettings;
+    onlySuccess(num: VigorAllSettingsConfig["onlySuccess"]): VigorAllSettings;
 }
-type VigorAllBefore = {
-    throwError?: (error: Error) => void;
-};
-type VigorAllAfter = {
-    setResult?: (result: any) => any;
-    throwError?: (error: Error) => void;
-};
-type VigorAllOnError = {
-    setResult?: (result: any) => any;
-    throwError?: (error: Error) => void;
-};
-type VigorAllResult = {
-    setResult?: (result: Array<any>) => Array<any>;
-    throwError?: (error: Error) => void;
-};
-type VigorAllFn<O> = (ctx: VigorAllContext<any>, obj: O) => void | any | Promise<void | any>;
-type VigorAllTaskFn<O> = (ctx: VigorAllTaskContext<any>, obj: O) => void | any | Promise<void | any>;
-type VigorAllBeforeFn = VigorAllTaskFn<VigorAllBefore>;
-type VigorAllAfterFn = VigorAllTaskFn<VigorAllAfter>;
-type VigorAllOnErrorFn = VigorAllTaskFn<VigorAllOnError>;
-type VigorAllResultFn = VigorAllFn<VigorAllResult>;
 type VigorAllInterceptorsConfig = {
-    before: VigorAllBeforeFn[];
-    after: VigorAllAfterFn[];
-    onError: VigorAllOnErrorFn[];
-    result: VigorAllResultFn[];
+    before: Array<VigorAllInterceptorsFunctions["before"]>;
+    after: Array<VigorAllInterceptorsFunctions["after"]>;
+    result: Array<VigorAllInterceptorsFunctions["result"]>;
+    onError: Array<VigorAllInterceptorsFunctions["onError"]>;
 };
-declare class VigorAllInterceptors extends VigorStatus<VigorAllInterceptorsConfig> {
+declare class VigorAllInterceptors extends VigorStatus<VigorAllInterceptorsConfig, VigorAllInterceptors> {
     constructor(config?: Partial<VigorAllInterceptorsConfig>);
-    before(...funcs: (VigorAllBeforeFn | VigorAllBeforeFn[])[]): VigorAllInterceptors;
-    after(...funcs: (VigorAllAfterFn | VigorAllAfterFn[])[]): VigorAllInterceptors;
-    onError(...funcs: (VigorAllOnErrorFn | VigorAllOnErrorFn[])[]): VigorAllInterceptors;
-    result(...funcs: (VigorAllResultFn | VigorAllResultFn[])[]): VigorAllInterceptors;
+    before(...funcs: VigorIncludeSpread<VigorAllInterceptorsConfig["before"][number]>): VigorAllInterceptors;
+    after(...funcs: VigorIncludeSpread<VigorAllInterceptorsConfig["after"][number]>): VigorAllInterceptors;
+    result(...funcs: VigorIncludeSpread<VigorAllInterceptorsConfig["result"][number]>): VigorAllInterceptors;
+    onError(...funcs: VigorIncludeSpread<VigorAllInterceptorsConfig["onError"][number]>): VigorAllInterceptors;
 }
-type VigorAllOptionsTask = {
-    abort?: (error: Error) => void;
-    signal?: AbortSignal;
-};
-type VigorAllTask<R = any> = (ctx: VigorAllTaskContext<any>, obj: VigorAllOptionsTask) => R | Promise<R>;
-type TaskReturn<T> = T extends VigorAllTask<infer R> ? R : never;
-type MapTasks<T extends readonly VigorAllTask<any>[]> = {
-    [K in keyof T]: TaskReturn<T[K]>;
-};
-type VigorAllConfig<Tasks extends readonly VigorAllTask<any>[]> = {
-    target: Tasks;
-    setting: VigorAllSettingsConfig;
+type VigorAllConfig = {
+    target: Array<(ctx: VigorAllEachContext) => unknown | Promise<unknown>>;
+    settings: VigorAllSettingsConfig;
     interceptors: VigorAllInterceptorsConfig;
 };
-type VigorAllContext<Tasks extends readonly VigorAllTask<any>[]> = VigorAllConfig<Tasks> & {
-    runtime: {
-        tasks: {
-            [K in keyof Tasks]: Promise<TaskReturn<Tasks[K]>>;
-        };
-        result: {
-            [K in keyof Tasks]: TaskReturn<Tasks[K]> | Error;
-        };
+type VigorAllInterceptorsApi<R> = {
+    setResult: (unk: Array<R>) => Array<R>;
+    throwError: <E extends Error>(err: E) => never;
+};
+type VigorAllInterceptorsEachApi<R> = {
+    setResult: (unk: R) => R;
+    throwError: <E extends Error>(err: E) => never;
+};
+type VigorAllInterceptorsFn<A extends keyof VigorAllInterceptorsApi<R>, R = unknown> = (ctx: VigorAllContext, api: Pick<VigorAllInterceptorsApi<R>, A>) => void | Promise<void>;
+type VigorAllInterceptorsEachFn<A extends keyof VigorAllInterceptorsApi<R>, R = unknown> = (ctx: VigorAllEachContext, api: Pick<VigorAllInterceptorsEachApi<R>, A>) => void | Promise<void>;
+type VigorAllInterceptorsFunctions = {
+    before: VigorAllInterceptorsEachFn<"throwError">;
+    after: VigorAllInterceptorsEachFn<"setResult" | "throwError">;
+    result: VigorAllInterceptorsFn<"setResult" | "throwError">;
+    onError: VigorAllInterceptorsEachFn<"setResult" | "throwError">;
+};
+type VigorAllContext = {
+    result: Array<unknown>;
+    timeline: Array<{
+        action: string;
+        content: unknown;
+    }>;
+    stats: VigorAllConfig;
+    queue: Set<Promise<{
+        success: boolean;
+        value: unknown;
+    }>>;
+};
+type VigorAllEachContext = {
+    result: unknown;
+    error: unknown;
+    timeline: Array<{
+        action: string;
+        content: unknown;
+    }>;
+    stats: VigorAllConfig;
+    root: VigorAllContext;
+    target: VigorAllConfig["target"][number];
+    semaphore: {
+        acquire: () => Promise<void>;
+        release: () => void;
     };
 };
-type VigorAllTaskContext<Task extends VigorAllTask<any>> = {
-    target: Task;
-    runtime: {
-        result: TaskReturn<Task> | typeof EMPTY;
-        error: unknown;
-        jitter: number;
-    };
-};
-declare class VigorAll<Tasks extends readonly VigorAllTask<any>[]> extends VigorStatus<VigorAllConfig<Tasks>> {
-    constructor(config?: Partial<VigorAllConfig<Tasks>>);
-    private _transfer;
-    target<T extends readonly VigorAllTask<any>[]>(funcs: T): VigorAll<T>;
-    target<T extends readonly VigorAllTask<any>[]>(...funcs: T): VigorAll<T>;
-    setting(func: (r: VigorAllSettings) => VigorAllSettings): this;
-    interceptors(func: (r: VigorAllInterceptors) => VigorAllInterceptors): this;
-    request(): Promise<MapTasks<Tasks>>;
+declare class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
+    constructor(config?: Partial<VigorAllConfig>);
+    target(...funcs: VigorIncludeSpread<VigorAllConfig["target"][number]>): VigorAll;
+    settings(func: ((s: VigorAllSettings) => VigorAllSettings) | VigorAllConfig["settings"]): VigorAll;
+    interceptors(func: ((s: VigorAllInterceptors) => VigorAllInterceptors) | VigorAllConfig["interceptors"]): VigorAll;
+    private runTask;
+    request<R extends VigorAllContext["result"]>(config?: VigorAllConfig, timeline?: VigorAllContext["timeline"]): Promise<R>;
 }
-type VigorRegistry = {
-    VigorRetry: {
-        main: <T>() => VigorRetry<T>;
-        error: typeof VigorRetryError;
-        setting: typeof VigorRetrySettings;
+declare const VigorEntry: {
+    retry: {
+        main: typeof VigorRetry;
+        settings: typeof VigorRetrySettings;
         interceptors: typeof VigorRetryInterceptors;
-        backoff: typeof VigorRetryBackoff;
+        error: typeof VigorRetryError;
+        algorithms: {
+            constant: typeof VigorRetryAlgorithmsConstant;
+            linear: typeof VigorRetryAlgorithmsLinear;
+            backoff: typeof VigorRetryAlgorithmsBackoff;
+            custom: typeof VigorRetryAlgorithmsCustom;
+        };
     };
-    VigorFetch: {
-        main: <T>() => VigorFetch<T>;
-        error: typeof VigorFetchError;
-        setting: typeof VigorFetchSettings;
-        interceptors: typeof VigorFetchInterceptors;
-    };
-    VigorAll: {
-        main: () => VigorAll<any>;
-        error: typeof VigorAllError;
-        setting: typeof VigorAllSettings;
-        interceptors: typeof VigorAllInterceptors;
-    };
-    VigorParse: {
-        main: <T>() => VigorParse<T>;
+    parse: {
+        main: typeof VigorParse;
+        settings: typeof VigorParseSettings;
+        interceptors: typeof VigorParseInterceptors;
         error: typeof VigorParseError;
+        strategies: typeof VigorParseStrategies;
+    };
+    fetch: {
+        main: typeof VigorFetch;
+        settings: typeof VigorFetchSettings;
+        interceptors: typeof VigorFetchInterceptors;
+        error: typeof VigorFetchError;
+    };
+    all: {
+        main: typeof VigorAll;
+        settings: typeof VigorAllSettings;
+        interceptors: typeof VigorAllInterceptors;
+        error: typeof VigorAllError;
     };
 };
-type VigorConfig = {
-    registry: VigorRegistry;
+declare const vigor: {
+    use: <C, R>(func: (entry: typeof VigorEntry, config: C) => R | Promise<R>, config: C) => Promise<R>;
+    fetch: (...strs: Parameters<VigorFetch["origin"]>[0][]) => VigorFetch;
+    retry: (target: Parameters<VigorRetry["target"]>[0]) => VigorRetry;
+    parse: (response: Parameters<VigorParse["target"]>[0]) => VigorParse;
+    all: (...funcs: Parameters<VigorAll["target"]>[0][]) => VigorAll;
+    builder: {
+        fetch: {
+            settings: (c?: Partial<VigorFetchSettingsConfig>) => VigorFetchSettings;
+            interceptors: (c?: Partial<VigorFetchInterceptorsConfig>) => VigorFetchInterceptors;
+        };
+        retry: {
+            settings: (c?: Partial<VigorRetrySettingsConfig>) => VigorRetrySettings;
+            interceptors: (c?: Partial<VigorRetryInterceptorsConfig>) => VigorRetryInterceptors;
+        };
+        parse: {
+            settings: (c?: Partial<VigorParseSettingsConfig>) => VigorParseSettings;
+            interceptors: (c?: Partial<VigorParseInterceptorsConfig>) => VigorParseInterceptors;
+        };
+        all: {
+            settings: (c?: Partial<VigorAllSettingsConfig>) => VigorAllSettings;
+            interceptors: (c?: Partial<VigorAllInterceptorsConfig>) => VigorAllInterceptors;
+        };
+    };
 };
-declare class Vigor {
-    private readonly registry;
-    constructor(config?: Partial<VigorConfig>);
-    fetch(origin: string): VigorFetch<unknown>;
-    all<const T extends readonly VigorAllTask<any>[]>(...tasks: T): VigorAll<T>;
-    parse(response: Response): VigorParse<unknown, false>;
-    retry<T>(fn: VigorRetryTask<T>): VigorRetry<T>;
-    use(plugin: (ctx: VigorRegistry, options?: object) => void, options?: object): Vigor;
-}
-declare const vigor: Vigor;
 
-export { Vigor, VigorAll, VigorAllError, VigorAllInterceptors, VigorAllSettings, VigorFetch, VigorFetchError, VigorFetchInterceptors, VigorFetchSettings, VigorParse, VigorParseError, VigorRetry, VigorRetryBackoff, VigorRetryError, VigorRetryInterceptors, VigorRetrySettings, vigor as default, vigor };
+export { VigorEntry, vigor as default, vigor };

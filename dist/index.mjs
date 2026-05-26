@@ -1,40 +1,34 @@
-const VIGOR_ERROR_MESSAGES = {
-    TIMEOUT: ({ limit, attempt }) => `Timeout: exceeded ${limit}ms (attempt: ${attempt})`,
+const VigorErrorMessageFuncs = {
+    INVALID_TARGET: ({ expected, received }) => `Invalid Task: ${typeof received} (expected: ${expected.join(', ')})`,
     EXHAUSTED: ({ maxAttempts }) => `Retry exhausted: max ${maxAttempts})`,
-    INVALID_URL: ({ received }) => `Invalid URL: ${received}`,
-    INVALID_PROTOCOL: ({ expected, received }) => `Invalid protocol: ${received} (expected ${expected.join(", ")})`,
-    FETCH_ERROR: ({ status, statusText, url }) => `HTTP Error: ${status} ${statusText} (url: ${url})`,
-    PARSE_FAILED: ({ expected }) => `Parse failed: expected ${expected}`,
-    INVALID_TYPE: ({ expected, received }) => `Invalid parser type: ${expected}`,
-    TARGET_MISSING: () => `Target missing`,
-    REQUEST_FAILED: ({ index, error }) => `Request failed at index ${index}: ${error?.message || "unknown"}`,
-    RESULT_NOT_SET: (() => `Result was not resolved`),
-    UNKNOWN: () => `Unknown error`
-};
-const normalizeError = (obj) => {
-    if (obj instanceof Error) {
-        throw obj;
-    }
-    throw new Error(String(obj));
+    TIMED_OUT: ({ limit, attempt }) => `Timeout: exceeded ${limit}ms (attempt: ${attempt})`,
+    INVALID_CONTENT_TYPE: ({ expected, received, response }) => `Invalid Content Type Header: ${typeof received} (expected: ${expected.join(', ')})`,
+    PARSER_NOT_FOUND: ({ expected, received, response }) => `Parser Not Found For Header: ${typeof received} (expected: ${expected.join(', ')})`,
+    PARSER_ALL_FAILED: ({ tried, response }) => `All Parser Failed, Tried: ${tried.join(', ')}`,
+    INVALID_PROTOCOL: ({ expected, received }) => `Invalid Protocol: ${typeof received} (expected: ${expected.join(', ')})`,
+    INVALID_BODY: ({ expected, received }) => `Invalid Body: ${typeof received} (expected: ${expected.join(', ')})`,
+    FETCH_FAILED: ({ status, response, url, headers, body, statusText }) => `Fetch Failed: ${status}`,
+    EMPTY_TARGET: ({}) => `Empty Body`
 };
 class VigorError extends Error {
     timestamp = new Date();
-    method;
-    code;
     cause;
-    context;
-    type;
+    code;
     data;
+    method;
+    stats;
+    context;
     constructor(code, options) {
-        const messageFn = VIGOR_ERROR_MESSAGES[code];
+        const messageFn = VigorErrorMessageFuncs[code];
         const message = `[${code}] ${messageFn(options?.data)}`;
         super(message, { cause: options?.cause });
         this.name = new.target.name;
-        this.method = options?.method;
         this.code = code;
-        this.context = options?.context;
-        this.type = options?.type;
+        this.cause = options.cause;
         this.data = options.data;
+        this.method = options.method;
+        this.stats = options.stats;
+        this.context = options.context;
         Object.setPrototypeOf(this, new.target.prototype);
         Error.captureStackTrace?.(this, new.target);
     }
@@ -59,743 +53,1121 @@ class VigorAllError extends VigorError {
         super(code, options);
     }
 }
-const EMPTY = Symbol("EMPTY");
 class VigorStatus {
     _base;
+    ctor;
     _config;
-    constructor(config, _base) {
+    constructor(config = {}, _base, ctor) {
         this._base = _base;
-        this._config = { ...this._base, ...config };
+        this.ctor = ctor;
+        this._config = { ..._base, ...config };
     }
-    getConfig() { return this._config; }
-    getBase() { return this._base; }
-    _next(config) { return new this.constructor({ ...this._config, ...config }, this._base); }
-    _pipsub(config, fn, ctor) {
-        return fn(new ctor(config)).getConfig();
+    _mergeConfig(source, target) {
+        const isPlainObject = (val) => val !== null && typeof val === 'object' && Object.getPrototypeOf(val) === Object.prototype;
+        if (target === undefined || target === null) {
+            return source;
+        }
+        if (isPlainObject(source) && isPlainObject(target)) {
+            const result = { ...source };
+            Object.keys(target).forEach((key) => {
+                result[key] = this._mergeConfig(result[key], target[key]);
+            });
+            return result;
+        }
+        if (Array.isArray(source) && Array.isArray(target)) {
+            return [...source, ...target];
+        }
+        return target;
     }
+    _next(config) { return this.ctor(this._mergeConfig(this._config, config)); }
+    _getConfig() { return this._config; }
+    _getBase() { return this._base; }
 }
+const VigorDefault = Symbol("DEFAULT");
 class VigorRetrySettings extends VigorStatus {
-    constructor(config = {}) {
-        super(config, {
-            count: 5,
-            limit: 10000,
-            maxDelay: 10000,
-            default: EMPTY
-        });
-    }
-    count(num) { return this._next({ count: num }); }
-    limit(num) { return this._next({ limit: num }); }
-    maxDelay(num) { return this._next({ maxDelay: num }); }
-    default(obj) { return this._next({ default: obj }); }
-}
-class VigorRetryBackoff extends VigorStatus {
-    constructor(config = {}) {
-        super(config, {
-            initialDelay: 0,
-            baseDelay: 1000,
-            factor: 1.7,
+    constructor(config) {
+        const base = {
+            default: VigorDefault,
+            timeout: 20 * 1000,
+            attempt: 5,
             jitter: 1000
-        });
+        };
+        super(config, base, (c) => new VigorRetrySettings(c));
     }
-    initialDelay(num) { return this._next({ initialDelay: num }); }
-    baseDelay(num) { return this._next({ baseDelay: num }); }
-    factor(num) { return this._next({ factor: num }); }
+    default(unk) { return this._next({ default: unk }); }
+    timeout(num) { return this._next({ timeout: num }); }
+    attempt(num) { return this._next({ attempt: num }); }
     jitter(num) { return this._next({ jitter: num }); }
-    static randomJitter(num) { return Math.random() * num; }
 }
 class VigorRetryInterceptors extends VigorStatus {
-    constructor(config = {}) {
-        super(config, {
+    constructor(config) {
+        const base = {
             before: [],
             after: [],
-            onError: [],
+            result: [],
+            retryIf: [],
             onRetry: [],
-            retryIf: []
-        });
+            onError: []
+        };
+        super(config, base, (c) => new VigorRetryInterceptors(c));
     }
-    before(...funcs) { return this._next({ ...this._config, before: [...this._config.before, ...funcs.flat()] }); }
-    after(...funcs) { return this._next({ ...this._config, after: [...this._config.after, ...funcs.flat()] }); }
-    onError(...funcs) { return this._next({ ...this._config, onError: [...this._config.onError, ...funcs.flat()] }); }
-    onRetry(...funcs) { return this._next({ ...this._config, onRetry: [...this._config.onRetry, ...funcs.flat()] }); }
-    retryIf(...funcs) { return this._next({ ...this._config, retryIf: [...this._config.retryIf, ...funcs.flat()] }); }
+    before(...funcs) { return this._next({ before: funcs.flat() }); }
+    after(...funcs) { return this._next({ after: funcs.flat() }); }
+    result(...funcs) { return this._next({ result: funcs.flat() }); }
+    retryIf(...funcs) { return this._next({ retryIf: funcs.flat() }); }
+    onRetry(...funcs) { return this._next({ onRetry: funcs.flat() }); }
+    onError(...funcs) { return this._next({ onError: funcs.flat() }); }
+}
+class VigorRetryAlgorithmsConstant extends VigorStatus {
+    constructor(config) {
+        const base = {
+            interval: 2000
+        };
+        super(config, base, (c) => new VigorRetryAlgorithmsConstant(c));
+    }
+    interval(num) { return this._next({ interval: num }); }
+    /** @internal */
+    _calculateDelay(attempt) {
+        return this._config.interval;
+    }
+}
+class VigorRetryAlgorithmsLinear extends VigorStatus {
+    constructor(config) {
+        const base = {
+            initial: 1000,
+            increment: 1000,
+            minDelay: 500,
+            maxDelay: 20 * 1000
+        };
+        super(config, base, (c) => new VigorRetryAlgorithmsLinear(c));
+    }
+    initial(num) { return this._next({ initial: num }); }
+    increment(num) { return this._next({ increment: num }); }
+    minDelay(num) { return this._next({ minDelay: num }); }
+    maxDelay(num) { return this._next({ maxDelay: num }); }
+    /** @internal */
+    _calculateDelay(attempt) {
+        const { initial, increment, minDelay, maxDelay } = this._config;
+        return Math.max(minDelay, Math.min(maxDelay, initial + increment * attempt));
+    }
+}
+class VigorRetryAlgorithmsBackoff extends VigorStatus {
+    constructor(config) {
+        const base = {
+            initial: 1000,
+            multiplier: 1.7,
+            unit: 1000,
+            minDelay: 500,
+            maxDelay: 20 * 1000
+        };
+        super(config, base, (c) => new VigorRetryAlgorithmsBackoff(c));
+    }
+    initial(num) { return this._next({ initial: num }); }
+    multiplier(num) { return this._next({ multiplier: num }); }
+    unit(num) { return this._next({ unit: num }); }
+    minDelay(num) { return this._next({ minDelay: num }); }
+    maxDelay(num) { return this._next({ maxDelay: num }); }
+    /** @internal */
+    _calculateDelay(attempt) {
+        const { initial, multiplier, unit, minDelay, maxDelay } = this._config;
+        return Math.max(minDelay, Math.min(maxDelay, initial + unit * Math.pow(multiplier, attempt)));
+    }
+}
+class VigorRetryAlgorithmsCustom extends VigorStatus {
+    constructor(config) {
+        const base = {
+            func: (attempt) => attempt * 1000,
+            minDelay: 500,
+            maxDelay: 20 * 1000
+        };
+        super(config, base, (c) => new VigorRetryAlgorithmsCustom(c));
+    }
+    func(num) { return this._next({ func: num }); }
+    /** @internal */
+    _calculateDelay(attempt) {
+        const { func, minDelay, maxDelay } = this._config;
+        return Math.max(minDelay, Math.min(maxDelay, func(attempt)));
+    }
 }
 class VigorRetry extends VigorStatus {
-    constructor(config = {}) {
-        super(config, {
-            target: null,
-            setting: new VigorRetrySettings().getBase(),
-            backoff: new VigorRetryBackoff().getBase(),
-            interceptors: new VigorRetryInterceptors().getBase(),
-            controller: config.controller || new AbortController()
-        });
+    constructor(config) {
+        const base = {
+            target: VigorDefault,
+            settings: new VigorRetrySettings()._getBase(),
+            interceptors: new VigorRetryInterceptors()._getBase(),
+            algorithm: new VigorRetryAlgorithmsBackoff()._calculateDelay,
+            abortSignals: []
+        };
+        super(config, base, (c) => new VigorRetry(c));
     }
-    _transfer(config) { return new VigorRetry({ ...this._config, ...config }); }
-    _calculateDelay(initialDelay, baseDelay, factor, attempt, jitter, maxDelay) {
-        return Math.max(0, Math.min(maxDelay, initialDelay + baseDelay * Math.pow(factor, attempt) + VigorRetryBackoff.randomJitter(jitter)));
-    }
-    createController() { return this._config.controller = new AbortController(); }
-    target(func) { return this._transfer({ target: func }); }
-    setting(func) {
-        return this._next({ setting: this._pipsub(this._config.setting, func, VigorRetrySettings) });
-    }
-    backoff(func) {
-        return this._next({ backoff: this._pipsub(this._config.backoff, func, VigorRetryBackoff) });
+    RetryAlgorithms = {
+        constant: (config) => new VigorRetryAlgorithmsConstant(config),
+        linear: (config) => new VigorRetryAlgorithmsLinear(config),
+        backoff: (config) => new VigorRetryAlgorithmsBackoff(config),
+        custom: (config) => new VigorRetryAlgorithmsCustom(config)
+    };
+    target(func) { return this._next({ target: func }); }
+    settings(func) {
+        if (typeof func === 'function') {
+            return this._next({ settings: func(new VigorRetrySettings(this._config.settings))._getConfig() });
+        }
+        return this._next({ settings: func });
     }
     interceptors(func) {
-        return this._next({ interceptors: this._pipsub(this._config.interceptors, func, VigorRetryInterceptors) });
+        if (typeof func === 'function') {
+            return this._next({ interceptors: func(new VigorRetryInterceptors(this._config.interceptors))._getConfig() });
+        }
+        return this._next({ interceptors: func });
     }
-    async request() {
-        const config = this._config;
+    algorithms(func) {
+        const instance = func(this.RetryAlgorithms);
+        return this._next({ algorithm: (attempt) => instance._calculateDelay(attempt) });
+    }
+    abortSignals(...abortSignals) {
+        return this._next({ abortSignals: abortSignals.flat() });
+    }
+    async request(config, timeline = []) {
+        const stats = this._mergeConfig(this._config, config);
         let ctx = {
-            target: config.target,
-            setting: { ...config.setting },
-            interceptors: {
-                before: [...config.interceptors.before],
-                after: [...config.interceptors.after],
-                onError: [...config.interceptors.onError],
-                onRetry: [...config.interceptors.onRetry],
-                retryIf: [...config.interceptors.retryIf],
-            },
-            backoff: { ...config.backoff },
-            controller: config.controller,
-            runtime: {
-                result: EMPTY,
-                controller: null,
-                attempt: 0,
-                aborted: false,
-                signal: null,
-                delay: 0,
-                retry: false,
-            }
+            result: VigorDefault,
+            error: VigorDefault,
+            attempt: 0,
+            delay: 0,
+            controller: VigorDefault,
+            timeline: timeline,
+            stats,
         };
-        const throwError = (error) => { throw error; };
+        const throwError = (error) => {
+            ctx.timeline.push({ action: "throwError called", content: error });
+            throw error;
+        };
         try {
-            while (ctx.runtime.attempt < ctx.setting.count) {
-                ctx.runtime.controller = new AbortController();
-                let listener;
-                let timerId;
-                const setAttempt = (attempt) => ctx.runtime.attempt = attempt;
-                const abort = (error) => { if (!ctx.runtime.aborted) {
-                    ctx.runtime.controller?.abort(error);
-                } };
+            if (typeof stats.target !== 'function')
+                throw new VigorRetryError("INVALID_TARGET", {
+                    method: "request",
+                    data: {
+                        expected: ["function"],
+                        received: stats.target
+                    },
+                    stats: stats,
+                    context: ctx
+                });
+            while (ctx.attempt < stats.settings.attempt) {
+                ctx.attempt++;
+                ctx.timeline.push({ action: "increased attempt", content: ctx.attempt });
+                let broke = false;
+                const breakRetry = (error) => {
+                    ctx.timeline.push({ action: "breakRetry called", content: error });
+                    broke = true;
+                    throw error;
+                };
                 try {
-                    ctx.runtime.signal = AbortSignal.any([
-                        ctx.controller.signal,
-                        ctx.runtime.controller.signal
-                    ]);
-                    ctx.runtime.abortPromise = new Promise((_, reject) => {
-                        if (ctx.runtime.signal.aborted)
-                            reject(ctx.runtime.signal.reason);
-                        listener = () => {
-                            ctx.runtime.aborted = true;
-                            reject(ctx.runtime.signal.reason);
-                        };
-                        ctx.runtime.signal.addEventListener("abort", listener, { once: true });
-                        timerId = setTimeout(() => {
-                            if (ctx.runtime.aborted)
-                                return;
-                            abort(new VigorRetryError("TIMEOUT", {
-                                method: "request",
-                                type: "timeout",
-                                data: {
-                                    limit: ctx.setting.limit,
-                                    attempt: ctx.runtime.attempt
-                                }
-                            }));
-                        }, ctx.setting.limit);
-                    });
-                    for (const func of ctx.interceptors.before) {
-                        await func(ctx, { setAttempt, throwError, abort });
-                        if (ctx.runtime.signal.aborted)
-                            normalizeError(ctx.runtime.signal.reason);
+                    ctx.timeline.push({ action: "process request_once handling", content: ctx.attempt });
+                    const controller = new AbortController();
+                    const timeoutController = new AbortController();
+                    const signal = AbortSignal.any([controller.signal, timeoutController.signal, ...stats.abortSignals]);
+                    const abort = (err) => controller.abort(err);
+                    ctx.timeline.push({ action: "interceptor handling: before", content: stats.interceptors.before });
+                    for (const func of stats.interceptors.before) {
+                        await func(ctx, { throwError, breakRetry, abort });
                     }
-                    ctx.runtime.result = await Promise.race([
-                        ctx.target(ctx, { abort, signal: ctx.runtime.signal }),
-                        ctx.runtime.abortPromise
-                    ]);
-                    const setResult = (result) => ctx.runtime.result = result;
-                    for (const func of ctx.interceptors.after) {
-                        await func(ctx, { setAttempt, setResult, throwError });
-                        if (ctx.runtime.signal.aborted)
-                            normalizeError(ctx.runtime.signal.reason);
+                    const timeoutTimer = setTimeout(() => {
+                        clearTimeout(timeoutTimer);
+                        timeoutController.abort(new VigorRetryError("TIMED_OUT", {
+                            method: "request",
+                            data: {
+                                limit: stats.settings.timeout,
+                                attempt: ctx.attempt
+                            },
+                        }));
+                    }, stats.settings.timeout);
+                    signal.throwIfAborted();
+                    let onAbort;
+                    try {
+                        ctx.result = await Promise.race([
+                            stats.target(ctx, { abort, signal }),
+                            new Promise((_, rej) => {
+                                onAbort = () => rej(signal.reason);
+                                signal.addEventListener("abort", onAbort);
+                            })
+                        ]);
                     }
-                    return ctx.runtime.result;
+                    finally {
+                        clearTimeout(timeoutTimer);
+                        if (onAbort)
+                            signal.removeEventListener("abort", onAbort);
+                    }
+                    const setResult = (unk) => {
+                        ctx.timeline.push({ action: "setResult called", content: unk });
+                        ctx.result = unk;
+                        return unk;
+                    };
+                    ctx.timeline.push({ action: "interceptor handling: after", content: stats.interceptors.after });
+                    for (const func of stats.interceptors.after) {
+                        await func(ctx, { setResult, throwError, breakRetry });
+                    }
+                    ctx.timeline.push({ action: "interceptor handling: result", content: stats.interceptors.result });
+                    for (const func of stats.interceptors.result) {
+                        await func(ctx, { setResult, throwError });
+                    }
+                    return ctx.result;
                 }
                 catch (error) {
-                    if (ctx.runtime.aborted)
-                        normalizeError(ctx.runtime.signal.reason);
-                    ctx.runtime.retry = true;
-                    ctx.runtime.error = error;
-                    const proceedRetry = () => ctx.runtime.retry = true;
-                    const cancelRetry = (error) => { ctx.runtime.error = error; return (ctx.runtime.retry = false); };
-                    for (const func of ctx.interceptors.retryIf) {
-                        await func(ctx, { throwError, proceedRetry, cancelRetry });
+                    ctx.error = error;
+                    ctx.timeline.push({ action: "process error_once handling", content: error });
+                    if (broke)
+                        throw error;
+                    let proceed = true;
+                    const proceedRetry = () => {
+                        ctx.timeline.push({ action: "proceedRetry called", content: true });
+                        return proceed = true;
+                    };
+                    const cancelRetry = () => {
+                        ctx.timeline.push({ action: "cancelRetry called", content: false });
+                        return proceed = false;
+                    };
+                    ctx.timeline.push({ action: "interceptor handling: retryIf", content: stats.interceptors.result });
+                    for (const func of stats.interceptors.retryIf) {
+                        await func(ctx, { proceedRetry, cancelRetry });
                     }
-                    if (!ctx.runtime.retry) {
-                        throw ctx.runtime.error;
+                    if (!proceed)
+                        throw error;
+                    ctx.delay = VigorDefault;
+                    const setDelay = (num) => {
+                        ctx.timeline.push({ action: "setDelay called", content: num });
+                        return ctx.delay = num;
+                    };
+                    const setAttempt = (num) => {
+                        ctx.timeline.push({ action: "setAttempt called", content: num });
+                        return ctx.attempt = num;
+                    };
+                    ctx.timeline.push({ action: "interceptor handling: onRetry", content: stats.interceptors.onRetry });
+                    for (const func of stats.interceptors.onRetry) {
+                        await func(ctx, { throwError, setDelay, setAttempt });
                     }
-                    const { initialDelay, baseDelay, factor, jitter } = ctx.backoff;
-                    ctx.runtime.delay = this._calculateDelay(initialDelay, baseDelay, factor, ctx.runtime.attempt, jitter, ctx.setting.maxDelay);
-                    const setDelay = (delay) => ctx.runtime.delay = delay;
-                    for (const func of ctx.interceptors.onRetry) {
-                        await func(ctx, { setAttempt, throwError, setDelay });
-                    }
-                    await new Promise((resolve, reject) => {
-                        const timer = setTimeout(resolve, ctx.runtime.delay);
-                        const abortHandler = () => {
-                            clearTimeout(timer);
-                            reject(ctx.controller.signal.reason);
-                        };
-                        if (ctx.controller.signal.aborted)
-                            return abortHandler();
-                        ctx.controller.signal.addEventListener("abort", abortHandler, { once: true });
-                    });
+                    if (typeof ctx.delay !== 'number')
+                        ctx.delay = stats.algorithm(ctx.attempt) + Math.random() * stats.settings.jitter;
+                    const delay = ctx.delay;
+                    await new Promise(r => setTimeout(r, delay));
                 }
-                finally {
-                    clearTimeout(timerId);
-                    if (listener)
-                        ctx.runtime.signal.removeEventListener("abort", listener);
-                }
-                ctx.runtime.attempt++;
             }
             throw new VigorRetryError("EXHAUSTED", {
                 method: "request",
-                type: "retry",
                 data: {
-                    maxAttempts: ctx.setting.count,
-                }
+                    maxAttempts: stats.settings.attempt,
+                },
+                context: ctx
             });
         }
         catch (error) {
-            ctx.runtime.error = error;
-            let overrided = false;
-            const setResult = (result) => { overrided = true; return (ctx.runtime.result = result); };
-            for (const func of ctx.interceptors.onError) {
-                await func(ctx, { setResult, throwError });
+            ctx.error = error;
+            let overwritten = false;
+            const setResult = (unk) => {
+                ctx.timeline.push({ action: "setResult called", content: unk });
+                ctx.result = unk;
+                overwritten = true;
+                return unk;
+            };
+            let restarted = false;
+            const restart = () => {
+                ctx.timeline.push({ action: "restart called" });
+                restarted = true;
+            };
+            ctx.timeline.push({ action: "interceptor handling: onError", content: stats.interceptors.onError });
+            for (const func of stats.interceptors.onError) {
+                await func(ctx, { setResult, throwError, restart });
             }
-            if (overrided && ctx.runtime.result !== EMPTY)
-                return ctx.runtime.result;
-            if (ctx.setting.default !== EMPTY)
-                return ctx.setting.default;
+            if (restarted) {
+                return await this.request(stats, ctx.timeline);
+            }
+            if (overwritten)
+                return ctx.result;
+            if (stats.settings.default !== VigorDefault)
+                return stats.settings.default;
             throw error;
         }
     }
 }
-class VigorParse extends VigorStatus {
-    constructor(config = {}) {
-        super(config, {
-            original: false
-        });
+class VigorParseSettings extends VigorStatus {
+    constructor(config) {
+        const base = {
+            raw: false,
+            default: VigorDefault
+        };
+        super(config, base, (c) => new VigorParseSettings(c));
     }
-    static stategy = [
-        { key: /text/, parse: (res) => res.text(), type: "text" },
-        { key: /json/, parse: (res) => res.json(), type: "json" },
-        { key: /multipart\/form-data/, parse: (res) => res.formData(), type: "formData" },
-        { key: /octet-stream/, parse: (res) => res.arrayBuffer(), type: "arrayBuffer" },
-        { key: /(image|video|audio|pdf)/, parse: (res) => res.blob(), type: "blob" },
+    original(bool) { return this._next({ raw: bool }); }
+    default(unk) { return this._next({ default: unk }); }
+}
+class VigorParseStrategies extends VigorStatus {
+    constructor(config) {
+        const base = {
+            funcs: []
+        };
+        super(config, base, (c) => new VigorParseStrategies(c));
+        this._config.funcs.push(this.ParseAutoAlgorithms.contentType);
+    }
+    ParseAutoHeaders = [
+        { header: "application/json", regExp: /application\/(.+\+)?json(.+\+)?/i, method: (res) => res.json() },
+        { header: "application/xml", regExp: /application\/(.+\+)?xml(.+\+)?/i, method: (res) => res.text() },
+        { header: "application/x-www-form-urlencoded", regExp: /application\/(.+\+)?x-www-form-urlencoded(.+\+)?/i, method: (res) => res.formData() },
+        { header: "application/octet-stream", regExp: /application\/(.+\+)?octet-stream(.+\+)?/i, method: (res) => res.arrayBuffer() },
+        { header: "image/*", regExp: /^image\/.+/i, method: (res) => res.blob() },
+        { header: "audio/*", regExp: /^audio\/.+/i, method: (res) => res.blob() },
+        { header: "video/*", regExp: /^video\/.+/i, method: (res) => res.blob() },
+        { header: "multipart/form-data", regExp: /multipart\/(.+\+)?form-data(.+\+)?/i, method: (res) => res.formData() },
+        { header: "text/*", regExp: /^text\/.+/i, method: (res) => res.text() },
     ];
-    static supported = this.stategy.map(i => i.type);
-    _transfer(config) { return new VigorParse({ ...this._config, ...config }); }
-    target(res) { return this._next({ target: res }); }
-    original(bool) { return this._transfer({ ...this._config, original: bool }); }
-    type(type) { return this._transfer({ ...this._config, result: undefined, type }); }
-    async request() {
-        const config = this._config;
-        if (!(config.target instanceof Response)) {
-            throw new VigorParseError("TARGET_MISSING", {
-                method: "request",
-                type: "args_missing",
-                data: undefined
-            });
-        }
-        if (config.original) {
-            return config.target;
-        }
-        const contentType = config.target.headers.get("Content-Type") || "";
-        let strategy;
-        try {
-            if (config.type) {
-                strategy = { type: config.type };
-                const parserRaw = config.target[config.type];
-                if (typeof parserRaw !== 'function')
-                    throw new VigorParseError("INVALID_TYPE", {
-                        method: "request",
-                        type: "invalid_method",
-                        data: {
-                            received: config.type,
-                            expected: strategy?.type ?? "unknown"
-                        }
-                    });
-                const parser = parserRaw.bind(config.target);
-                if (!parser || typeof parser !== 'function')
-                    throw new VigorParseError("PARSE_FAILED", {
-                        method: "request",
-                        type: "parse_failed",
-                        data: {
-                            expected: strategy?.type ?? "unknown"
-                        }
-                    });
-                return await parser();
+    ParseAutoMethods = [
+        { title: "json", method: (res) => res.json() },
+        { title: "formData", method: (res) => res.formData() },
+        { title: "text", method: (res) => res.text() },
+        { title: "blob", method: (res) => res.blob() },
+    ];
+    ParseAutoAlgorithms = {
+        contentType: async (response) => {
+            const parsers = this.ParseAutoHeaders;
+            const contentTypeHeader = response.headers.get("content-type");
+            if (!contentTypeHeader)
+                throw new VigorParseError("INVALID_CONTENT_TYPE", {
+                    method: "ParseAutoAlgorithms.contentType",
+                    data: {
+                        expected: ["string"],
+                        received: contentTypeHeader,
+                        response: response
+                    }
+                });
+            const toDo = parsers.find(parser => parser.regExp.test(contentTypeHeader));
+            if (!toDo)
+                throw new VigorParseError("PARSER_NOT_FOUND", {
+                    method: "ParseAutoAlgorithms.contentType",
+                    data: {
+                        expected: parsers.map(parser => parser.header),
+                        received: contentTypeHeader,
+                        response: response
+                    }
+                });
+            return await toDo.method(response);
+        },
+        sniff: async (response) => {
+            const parsers = this.ParseAutoMethods;
+            for (const [i, parser] of parsers.entries()) {
+                const cloned = (i === parsers.length - 1)
+                    ? response
+                    : response.clone();
+                try {
+                    const data = await parser.method(cloned);
+                    return data;
+                }
+                catch { }
             }
-            strategy = VigorParse.stategy.find(i => i.key.test(contentType)) ?? VigorParse.stategy[0];
-            return await strategy.parse(config.target);
-        }
-        catch (error) {
-            if (error instanceof VigorParseError)
-                throw error;
-            throw new VigorParseError("PARSE_FAILED", {
-                method: "request",
-                type: "parse_failed",
+            throw new VigorParseError("PARSER_ALL_FAILED", {
+                method: "ParseAutoAlgorithms.sniff",
                 data: {
-                    expected: strategy?.type ?? "unknown"
+                    tried: parsers.map(parser => parser.title),
+                    response: response
                 }
             });
+        }
+    };
+    contentType() { return this._next({ funcs: [this.ParseAutoAlgorithms.contentType] }); }
+    sniff() { return this._next({ funcs: [this.ParseAutoAlgorithms.sniff] }); }
+    json() { return this._next({ funcs: [(res) => res.json()] }); }
+    text() { return this._next({ funcs: [(res) => res.text()] }); }
+    arrayBuffer() { return this._next({ funcs: [(res) => res.arrayBuffer()] }); }
+    blob() { return this._next({ funcs: [(res) => res.blob()] }); }
+    bytes() { return this._next({ funcs: [(res) => res.arrayBuffer().then(r => new Uint8Array(r))] }); }
+    formData() { return this._next({ funcs: [(res) => res.formData()] }); }
+}
+class VigorParseInterceptors extends VigorStatus {
+    constructor(config) {
+        const base = {
+            before: [],
+            after: [],
+            result: [],
+            onError: []
+        };
+        super(config, base, (c) => new VigorParseInterceptors(c));
+    }
+    before(...funcs) { return this._next({ before: funcs.flat() }); }
+    after(...funcs) { return this._next({ after: funcs.flat() }); }
+    result(...funcs) { return this._next({ result: funcs.flat() }); }
+    onError(...funcs) { return this._next({ onError: funcs.flat() }); }
+}
+class VigorParse extends VigorStatus {
+    constructor(config) {
+        const base = {
+            target: VigorDefault,
+            settings: new VigorParseSettings()._getBase(),
+            strategies: new VigorParseStrategies()._getBase(),
+            interceptors: new VigorParseInterceptors()._getBase()
+        };
+        super(config, base, (c) => new VigorParse(c));
+    }
+    target(response) { return this._next({ target: response }); }
+    settings(func) {
+        if (typeof func === 'function') {
+            return this._next({ settings: func(new VigorParseSettings(this._config.settings))._getConfig() });
+        }
+        return this._next({ settings: func });
+    }
+    strategies(func) {
+        if (typeof func === 'function') {
+            return this._next({ strategies: func(new VigorParseStrategies(this._config.strategies))._getConfig() });
+        }
+        return this._next({ strategies: func });
+    }
+    interceptors(func) {
+        if (typeof func === 'function') {
+            return this._next({ interceptors: func(new VigorParseInterceptors(this._config.interceptors))._getConfig() });
+        }
+        return this._next({ interceptors: func });
+    }
+    async request(config, timeline = []) {
+        const stats = this._mergeConfig(this._config, config);
+        const target = stats.target;
+        let ctx = {
+            timeline: timeline,
+            stats,
+            response: target,
+            result: VigorDefault,
+            error: VigorDefault,
+        };
+        const throwError = (err) => {
+            ctx.timeline.push({ action: "throwError called", content: err });
+            throw err;
+        };
+        try {
+            if (target === VigorDefault)
+                throw new VigorParseError("INVALID_TARGET", {
+                    method: "request",
+                    data: {
+                        expected: ["Response"],
+                        received: target
+                    },
+                    context: ctx
+                });
+            ctx.timeline.push({ action: "interceptor handling: before", content: stats.interceptors.before });
+            for (const func of stats.interceptors.before) {
+                await func(ctx, { throwError });
+            }
+            if (stats.settings.raw) {
+                ctx.result = ctx.response;
+            }
+            else {
+                let parsed = false;
+                for (const [i, func] of stats.strategies.funcs.length > 0
+                    ? stats.strategies.funcs.entries()
+                    : new VigorParseStrategies().contentType()._getConfig().funcs.entries()) {
+                    const cloned = (i === stats.strategies.funcs.length - 1)
+                        ? ctx.response
+                        : ctx.response.clone();
+                    try {
+                        ctx.result = await func(cloned);
+                        parsed = true;
+                        break;
+                    }
+                    catch { }
+                }
+                if (!parsed)
+                    throw new VigorParseError("PARSER_ALL_FAILED", {
+                        method: "request",
+                        data: {
+                            tried: stats.strategies.funcs,
+                            response: ctx.response
+                        },
+                        context: ctx
+                    });
+            }
+            const setResult = (unk) => {
+                ctx.timeline.push({ action: "setResult called", content: unk });
+                ctx.result = unk;
+                return unk;
+            };
+            ctx.timeline.push({ action: "interceptor handling: after", content: stats.interceptors.after });
+            for (const func of stats.interceptors.after) {
+                await func(ctx, { setResult, throwError });
+            }
+            ctx.timeline.push({ action: "interceptor handling: result", content: stats.interceptors.result });
+            for (const func of stats.interceptors.result) {
+                await func(ctx, { setResult, throwError });
+            }
+            return ctx.result;
+        }
+        catch (error) {
+            ctx.error = error;
+            let overwritten = false;
+            const setResult = (unk) => {
+                ctx.timeline.push({ action: "setResult called", content: unk });
+                ctx.result = unk;
+                overwritten = true;
+                return unk;
+            };
+            ctx.timeline.push({ action: "interceptor handling: onError", content: stats.interceptors.onError });
+            for (const func of stats.interceptors.onError) {
+                await func(ctx, { setResult, throwError });
+            }
+            if (overwritten)
+                return ctx.result;
+            if (stats.settings.default !== VigorDefault)
+                return stats.settings.default;
+            throw error;
         }
     }
 }
 class VigorFetchSettings extends VigorStatus {
-    constructor(config = {}) {
-        super(config, {
-            origin: "",
-            path: [],
-            query: {},
-            unretry: [400, 401, 403, 404, 405, 413, 422],
+    constructor(config) {
+        const base = {
             retryHeaders: ["retry-after", "ratelimit-reset", "x-ratelimit-reset", "x-retry-after", "x-amz-retry-after", "chrome-proxy-next-link"],
-            default: EMPTY
-        });
+            unretryStatus: [400, 401, 403, 404, 405, 413, 422],
+            default: VigorDefault
+        };
+        super(config, base, (c) => new VigorFetchSettings(c));
     }
-    origin(str) { return this._next({ origin: str }); }
-    path(...strs) { return this._next({ path: [...this._config.path, ...strs.flat()] }); }
-    query(obj) { return this._next({ query: { ...this._config.query, ...obj } }); }
-    unretry(...numbers) { return this._next({ unretry: numbers.flat() }); }
-    retryHeaders(...strs) { return this._next({ retryHeaders: [...this._config.retryHeaders, ...strs.flat()] }); }
-    method(str) { return this._next({ method: str }); }
-    headers(obj) { return this._next({ headers: obj }); }
-    body(obj) { return this._next({ body: obj }); }
-    options(obj) { return this._next({ options: obj }); }
-    default(obj) { return this._next({ default: obj }); }
+    retryHeaders(...strs) { return this._next({ retryHeaders: strs.flat() }); }
+    unretryStatus(...nums) { return this._next({ unretryStatus: nums.flat() }); }
+    default(unk) { return this._next({ default: unk }); }
 }
 class VigorFetchInterceptors extends VigorStatus {
-    constructor(config = {}) {
-        super(config, {
+    constructor(config) {
+        const base = {
             before: [],
             after: [],
-            onError: [],
-            result: []
-        });
+            result: [],
+            onError: []
+        };
+        super(config, base, (c) => new VigorFetchInterceptors(c));
     }
-    before(...funcs) { return this._next({ before: [...this.getConfig().before, ...funcs.flat()] }); }
-    after(...funcs) { return this._next({ after: [...this.getConfig().after, ...funcs.flat()] }); }
-    onError(...funcs) { return this._next({ onError: [...this.getConfig().onError, ...funcs.flat()] }); }
-    result(...funcs) { return this._next({ result: [...this.getConfig().result, ...funcs.flat()] }); }
+    before(...funcs) { return this._next({ before: funcs.flat() }); }
+    after(...funcs) { return this._next({ after: funcs.flat() }); }
+    result(...funcs) { return this._next({ result: funcs.flat() }); }
+    onError(...funcs) { return this._next({ onError: funcs.flat() }); }
 }
 class VigorFetch extends VigorStatus {
-    constructor(config = {}) {
-        super(config, {
-            setting: new VigorFetchSettings().getBase(),
-            retryConfig: new VigorRetry().getBase(),
-            parseConfig: new VigorParse().getBase(),
-            interceptors: new VigorFetchInterceptors().getBase(),
+    constructor(config) {
+        const base = {
+            origin: [],
+            path: [],
+            query: [],
+            hash: "",
+            options: {
+                headers: {},
+                body: VigorDefault
+            },
+            settings: new VigorFetchSettings()._getBase(),
+            interceptors: new VigorFetchInterceptors()._getBase(),
+            retryConfig: new VigorRetry()._getBase(),
+            parseConfig: new VigorParse()._getBase()
+        };
+        super(config, base, (c) => new VigorFetch(c));
+    }
+    _stringifyList(unkList) {
+        return unkList
+            .filter(unk => unk !== null && unk !== undefined)
+            .map(unk => {
+            if (unk instanceof Date)
+                return unk.toISOString();
+            return String(unk);
         });
     }
-    origin(str) { return this._next({ setting: { ...this._config.setting, origin: str } }); }
-    path(...strs) { return this._next({ setting: { ...this._config.setting, path: [...this._config.setting.path, ...strs.map(s => String(s)).flat()] } }); }
-    query(obj) { return this._next({ setting: { ...this._config.setting, query: { ...this._config.setting.query, ...obj } } }); }
-    method(str) { return this._next({ setting: { ...this._config.setting, method: str } }); }
-    headers(obj) { return this._next({ setting: { ...this._config.setting, headers: obj } }); }
-    body(obj) { return this._next({ setting: { ...this._config.setting, body: obj } }); }
-    options(obj) { return this._next({ setting: { ...this._config.setting, options: obj } }); }
-    setting(func) {
-        return this._next({ setting: this._pipsub(this._config.setting, func, VigorFetchSettings) });
-    }
-    interceptors(func) {
-        return this._next({ interceptors: this._pipsub(this._config.interceptors, func, VigorFetchInterceptors) });
-    }
-    retryConfig(func) {
-        return this._next({ retryConfig: this._pipsub(this._config.retryConfig, func, VigorRetry) });
-    }
-    parseConfig(func) {
-        return this._next({ parseConfig: this._pipsub(this._config.parseConfig, func, VigorParse) });
-    }
-    buildUrl(origin, path, query) {
-        if (!origin)
-            throw new VigorFetchError("INVALID_URL", {
-                method: "buildUrl",
-                data: {
-                    received: origin
-                }
-            });
-        const url = new URL(origin);
-        const segments = [
-            url.pathname,
-            ...path
-        ]
-            .flat()
-            .filter(Boolean)
-            .flatMap(p => p.split('/'))
-            .filter(Boolean);
-        url.pathname = '/' + segments.join('/');
-        const params = new URLSearchParams(url.search);
-        for (const [k, v] of Object.entries(query ?? {})) {
-            if (v == null)
+    origin(...strs) { return this._next({ origin: this._stringifyList(strs.flat()) }); }
+    path(...strs) { return this._next({ path: this._stringifyList(strs.flat()) }); }
+    query(...strs) { return this._next({ query: strs.flat() }); }
+    hash(str) { return this._next({ hash: str }); }
+    options(obj) { return this._next({ options: obj }); }
+    headers(obj) { return this._next({ options: { headers: obj } }); }
+    body(obj) { return this._next({ options: { headers: this._config.options.headers, body: obj } }); }
+    _buildUrl(origin, path, query, hash) {
+        const originObj = new URL(origin[0]);
+        const baseStr = originObj.origin;
+        const pathObj = [originObj.pathname.replace(/^\/+|\/+$/g, '')];
+        for (const str of path) {
+            pathObj.push(str.replace(/^\/+|\/+$/g, ''));
+        }
+        const pathStr = pathObj.join('/');
+        const mainObj = new URL(pathStr, baseStr);
+        const parseVal = (val) => {
+            if (val instanceof Date)
+                return val.toISOString();
+            return String(val);
+        };
+        const queryObj = [...Array.from(originObj.searchParams.entries()), ...query.flatMap(qu => Object.entries(qu))];
+        for (const [key, val] of queryObj) {
+            if (val === undefined || val === null)
                 continue;
-            if (Array.isArray(v)) {
-                v.forEach(i => params.append(k, String(i)));
-            }
+            if (Array.isArray(val))
+                for (const e of val) {
+                    mainObj.searchParams.append(key, parseVal(e));
+                }
             else {
-                params.set(k, String(v));
+                mainObj.searchParams.append(key, parseVal(val));
             }
         }
-        url.search = params.toString();
-        return url.toString();
+        mainObj.hash = hash ?? originObj.hash;
+        return mainObj.href;
     }
-    async request() {
-        const config = this._config;
-        let ctx = {
-            setting: { ...config.setting },
-            retryConfig: {
-                ...config.retryConfig,
-                interceptors: {
-                    before: [...config.retryConfig.interceptors.before],
-                    after: [...config.retryConfig.interceptors.after],
-                    onError: [...config.retryConfig.interceptors.onError],
-                    onRetry: [...config.retryConfig.interceptors.onRetry],
-                    retryIf: [...config.retryConfig.interceptors.retryIf],
-                }
-            },
-            parseConfig: {
-                ...config.parseConfig
-            },
-            interceptors: {
-                before: [...config.interceptors.before],
-                after: [...config.interceptors.after],
-                onError: [...config.interceptors.onError],
-                result: [...config.interceptors.result]
-            },
-            runtime: {
-                result: EMPTY
+    _normalizeOptions(body) {
+        if (body == null)
+            return { isJson: false, headers: {}, body };
+        if (typeof body === "string")
+            return { isJson: false, headers: {
+                    "Content-Type": "text/plain;charset=UTF-8"
+                }, body };
+        if (body instanceof Blob)
+            return { isJson: false, headers: {
+                    ...(body.type && { "Content-Type": body.type })
+                }, body };
+        if (body instanceof ArrayBuffer)
+            return { isJson: false, headers: {
+                    "Content-Type": "application/octet-stream"
+                }, body };
+        if (body instanceof URLSearchParams)
+            return { isJson: false, headers: {
+                    "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+                }, body };
+        if (body instanceof FormData)
+            return { isJson: false, headers: {}, body };
+        if (typeof body === "object") {
+            return { isJson: true, headers: {
+                    "Content-Type": "application/json"
+                }, body: JSON.stringify(body) };
+        }
+        throw new VigorFetchError("INVALID_BODY", {
+            method: "_normalizeBody",
+            data: {
+                expected: ["string", "Blob", "ArrayBuffer", "URLSearchParams", "FormData"],
+                received: body
             }
+        });
+    }
+    settings(func) {
+        if (typeof func === 'function') {
+            return this._next({ settings: func(new VigorFetchSettings(this._config.settings))._getConfig() });
+        }
+        return this._next({ settings: func });
+    }
+    interceptors(func) {
+        if (typeof func === 'function') {
+            return this._next({ interceptors: func(new VigorFetchInterceptors(this._config.interceptors))._getConfig() });
+        }
+        return this._next({ interceptors: func });
+    }
+    retryConfig(func) {
+        if (typeof func === 'function') {
+            return this._next({ retryConfig: func(new VigorRetry(this._config.retryConfig))._getConfig() });
+        }
+        return this._next({ retryConfig: func });
+    }
+    parseConfig(func) {
+        if (typeof func === 'function') {
+            return this._next({ parseConfig: func(new VigorParse(this._config.parseConfig))._getConfig() });
+        }
+        return this._next({ parseConfig: func });
+    }
+    async request(config, timeline = []) {
+        const stats = this._mergeConfig(this._config, config);
+        let ctx = {
+            href: "",
+            result: VigorDefault,
+            response: VigorDefault,
+            options: {
+                headers: VigorDefault,
+                body: VigorDefault
+            },
+            error: VigorDefault,
+            timeline: timeline,
+            stats,
         };
-        const throwError = (error) => { throw error; };
+        const throwError = (err) => {
+            ctx.timeline.push({ action: "throwError called", content: err });
+            throw err;
+        };
         try {
-            ctx.runtime.unretrySet = new Set(ctx.setting.unretry);
-            if (!/^(https?|data|blob|file|about):\/\//.test(ctx.setting.origin))
+            try {
+                new URL(stats.origin[0]);
+            }
+            catch {
                 throw new VigorFetchError("INVALID_PROTOCOL", {
                     method: "request",
                     data: {
-                        expected: ["http", "https", "data", "blob", "file", "about"],
-                        received: ctx.setting.origin
+                        expected: ["valid URL protocol"],
+                        received: stats.origin
                     }
                 });
-            ctx.runtime.url = this.buildUrl(config.setting.origin, config.setting.path, config.setting.query);
-            const isJson = Array.isArray(ctx.setting.body) || (!!ctx.setting.body && Object.getPrototypeOf(ctx.setting.body) === Object.prototype);
-            ctx.runtime.baseOptions = {
-                method: ctx.setting.method || (ctx.setting.body ? "POST" : "GET"),
-                headers: { ...(isJson && { "Content-Type": "application/json" }), ...ctx.setting.headers },
-                ...(ctx.setting.body && { body: isJson ? JSON.stringify(ctx.setting.body) : ctx.setting.body }),
-                ...ctx.setting.options,
-                signal: null
+            }
+            ctx.href = this._buildUrl(stats.origin, stats.path, stats.query, stats.hash);
+            const { headers, body, ...others } = stats.options;
+            ctx.options = {
+                ...others,
+                headers: {}
             };
-            const target = async (ctx2, { signal }) => {
-                ctx.runtime.options = {
-                    ...ctx.runtime.baseOptions,
-                    signal
-                };
-                const response = await fetch(ctx.runtime.url, ctx.runtime.options);
-                return response;
+            const hasBody = body !== VigorDefault &&
+                body !== undefined;
+            if (hasBody) {
+                const normalized = this._normalizeOptions(body);
+                if (normalized.body !== undefined) {
+                    ctx.options.body = normalized.body;
+                }
+                Object.assign(ctx.options.headers, normalized.headers);
+            }
+            Object.assign(ctx.options.headers, headers);
+            ctx.timeline.push({ action: "options set", content: ctx.options });
+            const setOptions = (unk) => {
+                ctx.timeline.push({ action: "setOptions called", content: unk });
+                return ctx.options = unk;
             };
-            const checkOk = async (ctx2, { throwError }) => {
-                const result = ctx2.runtime.result;
-                if (!result.ok)
-                    return throwError?.(new VigorFetchError("FETCH_ERROR", {
+            const setHeaders = (unk) => {
+                ctx.timeline.push({ action: "setHeaders called", content: unk });
+                return ctx.options.headers = unk;
+            };
+            const setBody = (unk) => {
+                ctx.timeline.push({ action: "setBody called", content: unk });
+                return ctx.options.body = unk;
+            };
+            const fetchTask = async (ctx2, { abort, signal }) => {
+                ctx.options.signal = signal;
+                const result = await fetch(ctx.href, ctx.options);
+                return result;
+            };
+            const throwStatus = async (ctx2, api) => {
+                const response = ctx2.result;
+                if (!response.ok) {
+                    api.throwError(new VigorFetchError("FETCH_FAILED", {
                         method: "request",
-                        type: "fetch_error",
                         data: {
-                            status: result.status,
-                            statusText: result.statusText,
-                            url: result.url
+                            status: response.status,
+                            response: response,
+                            url: response.url,
+                            headers: response.headers,
+                            body: response.body,
+                            statusText: response.statusText
                         }
                     }));
+                }
             };
-            const handleBlacklist = (ctx2, { cancelRetry }) => {
-                const result = ctx2.runtime.result;
-                if (!result?.status || ctx.runtime.unretrySet.has(result.status))
-                    cancelRetry?.();
+            const handleBlacklist = async (ctx2, api) => {
+                const response = ctx2.result;
+                ctx.error = ctx2.error;
+                if (response instanceof Response) {
+                    if (stats.settings.unretryStatus.includes(response.status))
+                        api.cancelRetry();
+                    else
+                        api.proceedRetry();
+                }
             };
-            const handle429 = (ctx2, { setDelay }) => {
-                const result = ctx2.runtime.result;
-                if (result?.status === 429) {
-                    let rHeader = null;
-                    ctx.setting.retryHeaders.some(h => (rHeader = result.headers.get(h)));
-                    if (rHeader) {
-                        setDelay?.(isNaN(Number(rHeader)) ? new Date(rHeader).getTime() - Date.now() : Number(rHeader) * 1000) + VigorRetryBackoff.randomJitter(ctx.retryConfig.backoff.jitter);
+            const handleRatelimit = async (ctx2, api) => {
+                const response = ctx2.result;
+                ctx.error = ctx2.error;
+                if (response instanceof Response) {
+                    if (response.status === 429) {
+                        let retryHeader = null;
+                        for (const header of stats.settings.retryHeaders) {
+                            retryHeader = response.headers.get(header);
+                            if (retryHeader)
+                                break;
+                        }
+                        if (retryHeader) {
+                            const toNumber = Number(retryHeader);
+                            const delay = !isNaN(toNumber)
+                                ? toNumber * 1000
+                                : (() => {
+                                    const toDate = new Date(retryHeader).getTime();
+                                    return !isNaN(toDate)
+                                        ? toDate - Date.now()
+                                        : null;
+                                })();
+                            if (delay !== null && delay > 0)
+                                api.setDelay(delay + Math.random() * ctx2.stats.settings.jitter);
+                        }
                     }
                 }
             };
-            ctx.retryConfig.target = target;
-            ctx.retryConfig.interceptors.after.unshift(checkOk);
-            ctx.retryConfig.interceptors.retryIf.unshift(handleBlacklist);
-            ctx.retryConfig.interceptors.onRetry.unshift(handle429);
-            ctx.runtime.retryEngine = new VigorRetry(ctx.retryConfig);
-            ctx.runtime.parseEngine = new VigorParse(ctx.parseConfig);
-            const setOptions = (obj) => ctx.runtime.baseOptions = obj;
-            for (const func of ctx.interceptors.before) {
-                await func(ctx, { setOptions, throwError });
+            stats.retryConfig.interceptors.after.unshift(throwStatus);
+            stats.retryConfig.interceptors.retryIf.unshift(handleBlacklist);
+            stats.retryConfig.interceptors.onRetry.unshift(handleRatelimit);
+            const retryEngine = new VigorRetry(stats.retryConfig)
+                .target(fetchTask);
+            const parseEngine = new VigorParse(stats.parseConfig);
+            ctx.timeline.push({ action: "interceptor handling: before", content: stats.interceptors.before });
+            for (const func of stats.interceptors.before) {
+                await func(ctx, { throwError, setOptions, setHeaders, setBody });
             }
-            ctx.runtime.response = await ctx.runtime.retryEngine.request();
-            for (const func of ctx.interceptors.after) {
-                await func(ctx, { throwError });
-            }
-            ctx.runtime.result = await ctx.runtime.parseEngine?.target(ctx.runtime.response).request();
-            const setResult = (result) => ctx.runtime.result = result;
-            for (const func of ctx.interceptors.result) {
+            ctx.response = await retryEngine.request(undefined, timeline);
+            ctx.result = await parseEngine.target(ctx.response).request(undefined, timeline);
+            const setResult = (unk) => {
+                ctx.timeline.push({ action: "setResult called", content: unk });
+                ctx.result = unk;
+                return unk;
+            };
+            ctx.timeline.push({ action: "interceptor handling: after", content: stats.interceptors.after });
+            for (const func of stats.interceptors.after) {
                 await func(ctx, { setResult, throwError });
             }
-            return ctx.runtime.result;
+            ctx.timeline.push({ action: "interceptor handling: result", content: stats.interceptors.result });
+            for (const func of stats.interceptors.result) {
+                await func(ctx, { setResult, throwError });
+            }
+            return ctx.result;
         }
         catch (error) {
-            ctx.runtime.error = error;
-            let overrided = false;
-            const setResult = (result) => { overrided = true; return (ctx.runtime.result = result); };
-            for (const func of ctx.interceptors.onError) {
-                await func(ctx, { setResult, throwError });
+            ctx.error = error;
+            let overwritten = false;
+            const setResult = (unk) => {
+                ctx.timeline.push({ action: "setResult called", content: unk });
+                ctx.result = unk;
+                overwritten = true;
+                return unk;
+            };
+            let restarted = false;
+            const restart = () => {
+                ctx.timeline.push({ action: "restart called" });
+                restarted = true;
+            };
+            ctx.timeline.push({ action: "interceptor handling: onError", content: stats.interceptors.onError });
+            for (const func of stats.interceptors.onError) {
+                await func(ctx, { setResult, throwError, restart });
             }
-            if (overrided && ctx.runtime.result !== EMPTY)
-                return ctx.runtime.result;
-            if (ctx.setting.default !== EMPTY)
-                return ctx.setting.default;
+            if (restarted) {
+                return await this.request(stats, timeline);
+            }
+            if (overwritten)
+                return ctx.result;
+            if (stats.settings.default !== VigorDefault)
+                return stats.settings.default;
             throw error;
         }
     }
 }
 class VigorAllSettings extends VigorStatus {
-    constructor(config = {}) {
-        super(config, {
+    constructor(config) {
+        const base = {
             concurrency: 5,
-            jitter: 1000,
             onlySuccess: false
-        });
+        };
+        super(config, base, (c) => new VigorAllSettings(c));
     }
     concurrency(num) { return this._next({ concurrency: num }); }
-    jitter(num) { return this._next({ jitter: num }); }
-    onlySuccess(bool) { return this._next({ onlySuccess: bool }); }
+    onlySuccess(num) { return this._next({ onlySuccess: num }); }
 }
 class VigorAllInterceptors extends VigorStatus {
-    constructor(config = {}) {
-        super(config, {
+    constructor(config) {
+        const base = {
             before: [],
             after: [],
-            onError: [],
-            result: []
-        });
+            result: [],
+            onError: []
+        };
+        super(config, base, (c) => new VigorAllInterceptors(c));
     }
-    before(...funcs) { return this._next({ before: [...this.getConfig().before, ...funcs.flat()] }); }
-    after(...funcs) { return this._next({ after: [...this.getConfig().after, ...funcs.flat()] }); }
-    onError(...funcs) { return this._next({ onError: [...this.getConfig().onError, ...funcs.flat()] }); }
-    result(...funcs) { return this._next({ result: [...this.getConfig().result, ...funcs.flat()] }); }
+    before(...funcs) { return this._next({ before: funcs.flat() }); }
+    after(...funcs) { return this._next({ after: funcs.flat() }); }
+    result(...funcs) { return this._next({ result: funcs.flat() }); }
+    onError(...funcs) { return this._next({ onError: funcs.flat() }); }
 }
 class VigorAll extends VigorStatus {
-    constructor(config = {}) {
-        super(config, {
+    constructor(config) {
+        const base = {
             target: [],
-            setting: new VigorAllSettings().getBase(),
-            interceptors: new VigorAllInterceptors().getBase()
-        });
+            settings: new VigorAllSettings()._getBase(),
+            interceptors: new VigorAllInterceptors()._getBase()
+        };
+        super(config, base, (c) => new VigorAll(c));
     }
-    _transfer(config) {
-        return new VigorAll({
-            ...this._config,
-            ...config
-        });
-    }
-    target(...args) {
-        const flat = args.flat();
-        return this._transfer({ target: flat });
-    }
-    setting(func) {
-        return this._next({
-            setting: this._pipsub(this._config.setting, func, VigorAllSettings)
-        });
+    target(...funcs) { return this._next({ target: funcs.flat() }); }
+    settings(func) {
+        if (typeof func === 'function') {
+            return this._next({ settings: func(new VigorAllSettings(this._config.settings))._getConfig() });
+        }
+        return this._next({ settings: func });
     }
     interceptors(func) {
-        return this._next({
-            interceptors: this._pipsub(this._config.interceptors, func, VigorAllInterceptors)
-        });
+        if (typeof func === 'function') {
+            return this._next({ interceptors: func(new VigorAllInterceptors(this._config.interceptors))._getConfig() });
+        }
+        return this._next({ interceptors: func });
     }
-    async request() {
-        const config = this._config;
+    async runTask(task, { stats, root }, semaphore) {
         let ctx = {
-            setting: { ...config.setting },
-            target: [...config.target],
-            interceptors: {
-                before: [...config.interceptors.before],
-                after: [...config.interceptors.after],
-                onError: [...config.interceptors.onError],
-                result: [...config.interceptors.result],
-            },
-            runtime: {
-                tasks: [],
-                result: [],
-            }
+            result: VigorDefault,
+            error: VigorDefault,
+            timeline: [],
+            stats,
+            root,
+            target: task,
+            semaphore
         };
-        if (ctx.target.length == 0)
-            throw new VigorAllError("TARGET_MISSING", {
-                method: "request",
-                data: undefined
-            });
-        let active = 0;
-        const queue = [];
-        const runTask = async (task) => {
-            await new Promise(resolve => {
-                if (active < config.setting.concurrency) {
-                    active++;
-                    resolve();
-                }
-                else {
-                    queue.push(() => {
-                        active++;
-                        resolve();
-                    });
-                }
-            });
-            const throwError = (error) => { throw error; };
-            let ctxTask = {
-                target: task,
-                runtime: {
-                    result: EMPTY,
-                    error: null,
-                    jitter: VigorRetryBackoff.randomJitter(config.setting.jitter)
-                }
-            };
+        const throwError = (err) => {
+            ctx.timeline.push({ action: "throwError called", content: err });
+            throw err;
+        };
+        try {
             try {
-                await new Promise(resolve => setTimeout(resolve, ctxTask.runtime.jitter));
-                for (const func of config.interceptors.before) {
-                    await func(ctxTask, { throwError });
+                await semaphore.acquire();
+                ctx.timeline.push({ action: "task acquired", content: ctx.target });
+                ctx.timeline.push({ action: "interceptor handling: before", content: stats.interceptors.before });
+                for (const func of stats.interceptors.before) {
+                    await func(ctx, { throwError });
                 }
-                ctxTask.runtime.result = await task(ctxTask, {});
-                const setResult = (result) => ctxTask.runtime.result = result;
-                for (const func of config.interceptors.after) {
-                    await func(ctxTask, { setResult, throwError });
-                }
-                if (ctxTask.runtime.result === EMPTY) {
-                    throw new VigorAllError("RESULT_NOT_SET", {
-                        method: "request",
-                        data: undefined
-                    });
-                }
-                return ctxTask.runtime.result;
-            }
-            catch (error) {
-                ctxTask.runtime.error = error;
-                let overrided = false;
-                const setResult = (result) => {
-                    overrided = true;
-                    return (ctxTask.runtime.result = result);
-                };
-                for (const func of config.interceptors.onError) {
-                    await func(ctxTask, { setResult, throwError });
-                }
-                if (overrided && ctxTask.runtime.result !== EMPTY)
-                    return ctxTask.runtime.result;
-                throw ctxTask.runtime.error;
+                ctx.timeline.push({ action: "task started", content: ctx.target });
+                ctx.result = await task(ctx);
             }
             finally {
-                active--;
-                const next = queue.shift();
-                if (next)
-                    next();
-            }
-        };
-        ctx.runtime.tasks = ctx.target.map(task => runTask(task));
-        const settled = await Promise.allSettled(ctx.runtime.tasks);
-        const isFailed = Symbol("FAILED");
-        ctx.runtime.result = settled.map((res, idx) => {
-            if (res.status === "fulfilled")
-                return res.value;
-            if (ctx.setting.onlySuccess)
-                return isFailed;
-            return new VigorAllError("REQUEST_FAILED", {
-                method: "request",
-                data: {
-                    index: idx,
-                    error: normalizeError(res?.reason || "unknown")
+                ctx.timeline.push({ action: "task ended", content: ctx.target });
+                const setResult = (unk) => {
+                    ctx.timeline.push({ action: "setResult called", content: unk });
+                    ctx.result = unk;
+                    return unk;
+                };
+                ctx.timeline.push({ action: "interceptor handling: after", content: stats.interceptors.after });
+                for (const func of stats.interceptors.after) {
+                    await func(ctx, { setResult, throwError });
                 }
+                semaphore.release();
+                ctx.timeline.push({ action: "task released", content: ctx.target });
+                return ctx.result;
+            }
+        }
+        catch (error) {
+            ctx.error = error;
+            let overwritten = false;
+            const setResult = (unk) => {
+                ctx.timeline.push({ action: "setResult called", content: unk });
+                ctx.result = unk;
+                overwritten = true;
+                return unk;
+            };
+            ctx.timeline.push({ action: "interceptor handling: onError", content: stats.interceptors.onError });
+            for (const func of stats.interceptors.onError) {
+                await func(ctx, { setResult, throwError });
+            }
+            if (overwritten)
+                return ctx.result;
+            throw error;
+        }
+    }
+    async request(config, timeline = []) {
+        const stats = this._mergeConfig(this._config, config);
+        let ctx = {
+            result: VigorDefault,
+            timeline,
+            stats,
+            queue: new Set()
+        };
+        if (stats.target.length === 0)
+            throw new VigorAllError("EMPTY_TARGET", {
+                method: "request",
+                data: {}
             });
-        }).filter(i => i !== isFailed);
-        const setResult = (result) => ctx.runtime.result = result;
-        const throwError = (error) => { throw error; };
-        for (const func of config.interceptors.result) {
+        const waitQueue = [];
+        for (const task of stats.target) {
+            const acquire = () => {
+                if (ctx.queue.size < stats.settings.concurrency) {
+                    return Promise.resolve();
+                }
+                return new Promise((res) => waitQueue.push(res));
+            };
+            const release = () => {
+                if (waitQueue.length > 0) {
+                    const next = waitQueue.shift();
+                    if (next)
+                        next();
+                }
+            };
+            acquire();
+            let promise;
+            promise = this.runTask(task, { stats, root: ctx }, { acquire, release }).then(res => {
+                ctx.queue.delete(promise);
+                return { success: true, value: res };
+            }).catch(err => ({ success: false, value: err }));
+            ctx.queue.add(promise);
+        }
+        const raw = await Promise.all(ctx.queue);
+        ctx.result = stats.settings.onlySuccess
+            ? raw.filter(r => r.success).map(r => r.value)
+            : raw.map(r => r.value);
+        const setResult = (unk) => {
+            ctx.timeline.push({ action: "setResult called", content: unk });
+            ctx.result = unk;
+            return unk;
+        };
+        const throwError = (err) => {
+            ctx.timeline.push({ action: "throwError called", content: err });
+            throw err;
+        };
+        ctx.timeline.push({ action: "interceptor handling: result", content: stats.interceptors.result });
+        for (const func of stats.interceptors.result) {
             await func(ctx, { setResult, throwError });
         }
-        return ctx.runtime.result;
+        return ctx.result;
     }
 }
-class Vigor {
-    registry;
-    constructor(config) {
-        const defaultRegistry = {
-            VigorRetry: {
-                main: () => new VigorRetry(),
-                error: VigorRetryError,
-                setting: VigorRetrySettings,
-                interceptors: VigorRetryInterceptors,
-                backoff: VigorRetryBackoff,
-            },
-            VigorFetch: {
-                main: () => new VigorFetch(),
-                error: VigorFetchError,
-                setting: VigorFetchSettings,
-                interceptors: VigorFetchInterceptors,
-            },
-            VigorAll: {
-                main: () => new VigorAll(),
-                error: VigorAllError,
-                setting: VigorAllSettings,
-                interceptors: VigorAllInterceptors,
-            },
-            VigorParse: {
-                main: () => new VigorParse(),
-                error: VigorParseError,
-            }
-        };
-        this.registry = config?.registry ?? defaultRegistry;
+const VigorEntry = {
+    retry: {
+        main: VigorRetry,
+        settings: VigorRetrySettings,
+        interceptors: VigorRetryInterceptors,
+        error: VigorRetryError,
+        algorithms: {
+            constant: VigorRetryAlgorithmsConstant,
+            linear: VigorRetryAlgorithmsLinear,
+            backoff: VigorRetryAlgorithmsBackoff,
+            custom: VigorRetryAlgorithmsCustom
+        }
+    },
+    parse: {
+        main: VigorParse,
+        settings: VigorParseSettings,
+        interceptors: VigorParseInterceptors,
+        error: VigorParseError,
+        strategies: VigorParseStrategies
+    },
+    fetch: {
+        main: VigorFetch,
+        settings: VigorFetchSettings,
+        interceptors: VigorFetchInterceptors,
+        error: VigorFetchError,
+    },
+    all: {
+        main: VigorAll,
+        settings: VigorAllSettings,
+        interceptors: VigorAllInterceptors,
+        error: VigorAllError
     }
-    fetch(origin) {
-        return this.registry.VigorFetch.main().origin(origin);
+};
+const vigor = {
+    use: async (func, config) => {
+        return await func(VigorEntry, config);
+    },
+    fetch: (...strs) => {
+        return new VigorFetch().origin(...strs);
+    },
+    retry: (target) => {
+        return new VigorRetry().target(target);
+    },
+    parse: (response) => {
+        return new VigorParse().target(response);
+    },
+    all: (...funcs) => {
+        return new VigorAll().target(...funcs);
+    },
+    builder: {
+        fetch: {
+            settings: (c) => new VigorFetchSettings(c),
+            interceptors: (c) => new VigorFetchInterceptors(c),
+        },
+        retry: {
+            settings: (c) => new VigorRetrySettings(c),
+            interceptors: (c) => new VigorRetryInterceptors(c),
+        },
+        parse: {
+            settings: (c) => new VigorParseSettings(c),
+            interceptors: (c) => new VigorParseInterceptors(c),
+        },
+        all: {
+            settings: (c) => new VigorAllSettings(c),
+            interceptors: (c) => new VigorAllInterceptors(c),
+        }
     }
-    all(...tasks) {
-        return this.registry.VigorAll
-            .main()
-            .target(...tasks);
-    }
-    parse(response) {
-        return this.registry.VigorParse.main().target(response);
-    }
-    retry(fn) {
-        return this.registry.VigorRetry.main().target(fn);
-    }
-    use(plugin, options) {
-        const nextRegistry = {
-            ...this.registry,
-            VigorFetch: {
-                ...this.registry.VigorFetch
-            },
-            VigorRetry: {
-                ...this.registry.VigorRetry
-            },
-            VigorAll: {
-                ...this.registry.VigorAll
-            },
-            VigorParse: {
-                ...this.registry.VigorParse
-            }
-        };
-        plugin(nextRegistry, options);
-        return new Vigor({
-            registry: nextRegistry
-        });
-    }
-}
-const vigor = new Vigor();
+};
 
-export { Vigor, VigorAll, VigorAllError, VigorAllInterceptors, VigorAllSettings, VigorFetch, VigorFetchError, VigorFetchInterceptors, VigorFetchSettings, VigorParse, VigorParseError, VigorRetry, VigorRetryBackoff, VigorRetryError, VigorRetryInterceptors, VigorRetrySettings, vigor as default, vigor };
+export { VigorEntry, vigor as default, vigor };

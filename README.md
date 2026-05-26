@@ -1,6 +1,6 @@
 # vigor-fetch
 
-**Vigor** is a lightweight (minified + gzipped ~4.3kb) TypeScript HTTP / Retry utility library.  
+**Vigor** is a lightweight (minified + gzipped ~10kb) TypeScript HTTP / Retry utility library.  
 Vigor provides a fluent, chainable API for building robust network logic with built-in retry, backoff, interceptors, parsing, and concurrency control.
 
 ---
@@ -8,10 +8,10 @@ Vigor provides a fluent, chainable API for building robust network logic with bu
 ## Features
 
 - 🧩 **Fluent & Immutable API** — Fully composable, side-effect-free chaining
-- 🔁 **Advanced Retry System** — Exponential backoff with jitter support.
+- 🔁 **Advanced Retry System** — Constant, linear, backoff, custom delay with jitter support.
 - 🌐 **Smart Fetch Layer** — Automatic 429 handling & configurable retry rules
 - ⚡ **Parallel Requests** — Concurrency-limited task runner
-- 🔌 **Smart Response Parsing** — Auto parsing based on Content-Type
+- 🔌 **Smart Response Parsing** — Auto parsing based on Content-Type, Sniffing
 - ⚡ **Zero Dependencies** — Built on native Fetch + AbortController
 - 🪝 **Powerful Interceptors** — Lifecycle hooks for full control flow
 - 🧠 **TypeScript First** — Fully typed inference across all modules
