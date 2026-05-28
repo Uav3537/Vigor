@@ -1,6 +1,6 @@
 # vigor-fetch
 
-## Vigor is a composable, lightweighted (gzipped ~10kb) network workflow toolkit built on top of native Fetch.
+## Vigor is a composable, lightweighted (minified + gzipped ~5.5kb) network workflow toolkit built on top of native Fetch.
 
 > Vigor provides a fluent, chainable API for building robust network logic with built-in retry, backoff, interceptors, parsing, and concurrency control.
 

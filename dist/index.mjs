@@ -60,7 +60,7 @@ class VigorStatus {
     constructor(config = {}, _base, ctor) {
         this._base = _base;
         this.ctor = ctor;
-        this._config = { ..._base, ...config };
+        this._config = { ...this._base, ...(config || {}) };
     }
     _mergeConfig(source, target) {
         const isPlainObject = (val) => val !== null && typeof val === 'object' && Object.getPrototypeOf(val) === Object.prototype;
@@ -195,7 +195,7 @@ class VigorRetry extends VigorStatus {
             target: VigorDefault,
             settings: new VigorRetrySettings()._getBase(),
             interceptors: new VigorRetryInterceptors()._getBase(),
-            algorithm: new VigorRetryAlgorithmsBackoff()._calculateDelay,
+            algorithm: (attempt) => new VigorRetryAlgorithmsBackoff()._calculateDelay(attempt),
             abortSignals: []
         };
         super(config, base, (c) => new VigorRetry(c));

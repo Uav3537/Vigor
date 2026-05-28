@@ -91,7 +91,7 @@ abstract class VigorStatus<C, Self> {
         protected readonly _base: C,
         protected readonly ctor: (config: C) => Self
     ) {
-        this._config = {..._base, ...config}
+        this._config = { ...this._base, ...(config || {}) };
     }
     protected _mergeConfig<C>(source: any, target: C | Partial<C> | undefined): C {
         const isPlainObject = (val: any): boolean => 
@@ -288,13 +288,13 @@ type VigorRetryAlgorithmsConfig = (attempt: number) => number
 
 
 type VigorRetryInterceptorsApi<R> = {
-    setResult: (unk: R) => R
+    setResult: (unk: R) => void
     throwError: <E extends Error>(err: E) => never
     breakRetry: <E extends Error>(err: E) => never
-    proceedRetry: () => true
-    cancelRetry: () => false
-    setDelay: <D extends number>(num: D) => D
-    setAttempt: <A extends number>(num: A) => A
+    proceedRetry: () => void
+    cancelRetry: () => void
+    setDelay: <D extends number>(num: D) => void
+    setAttempt: <A extends number>(num: A) => void
     restart: () => void
     abort: <E extends Error>(err: E) => void
 }
@@ -337,7 +337,7 @@ class VigorRetry extends VigorStatus<VigorRetryConfig, VigorRetry> {
             target: VigorDefault as unknown as VigorRetryConfig["target"],
             settings: new VigorRetrySettings()._getBase(),
             interceptors: new VigorRetryInterceptors()._getBase(),
-            algorithm: new VigorRetryAlgorithmsBackoff()._calculateDelay,
+            algorithm: (attempt: number) => new VigorRetryAlgorithmsBackoff()._calculateDelay(attempt),
             abortSignals: []
         }
         super(config, base, (c) => new VigorRetry(c))
@@ -677,7 +677,7 @@ class VigorParseInterceptors extends VigorStatus<VigorParseInterceptorsConfig, V
 }
 
 type VigorParseInterceptorsApi<R> = {
-    setResult: (unk: R) => R
+    setResult: (unk: R) => void
     throwError: <E extends Error>(err: E) => never
 }
 
@@ -897,10 +897,10 @@ type VigorFetchConfig = {
 }
 
 type VigorFetchInterceptorsApi<R> = {
-    setResult: (unk: R) => R
-    setOptions: (unk: VigorFetchContext["options"]) => VigorFetchContext["options"]
-    setHeaders: (unk: VigorFetchConfig["options"]["headers"]) => VigorFetchConfig["options"]["headers"]
-    setBody: (unk: VigorFetchConfig["options"]["body"]) => VigorFetchConfig["options"]["body"]
+    setResult: (unk: R) => void
+    setOptions: (unk: VigorFetchContext["options"]) => void
+    setHeaders: (unk: VigorFetchConfig["options"]["headers"]) => void
+    setBody: (unk: VigorFetchConfig["options"]["body"]) => void
     throwError: <E extends Error>(err: E) => never
     restart: () => void
 }
@@ -1287,12 +1287,12 @@ type VigorAllConfig = {
 }
 
 type VigorAllInterceptorsApi<R> = {
-    setResult: (unk: Array<R>) => Array<R>
+    setResult: (unk: Array<R>) => void
     throwError: <E extends Error>(err: E) => never
 }
 
 type VigorAllInterceptorsEachApi<R> = {
-    setResult: (unk: R) => R
+    setResult: (unk: R) => void
     throwError: <E extends Error>(err: E) => never
 }
 
@@ -1525,34 +1525,34 @@ const vigor = {
     ): Promise<R> => {
         return await func(VigorEntry, config);
     },
-    fetch: (...strs: Parameters<VigorFetch["origin"]>[0][]) => {
+    fetch: (...strs: Parameters<VigorFetch["origin"]>[0][]): VigorFetch => {
         return new VigorFetch().origin(...strs)
     },
-    retry: (target: Parameters<VigorRetry["target"]>[0]) => {
+    retry: (target: Parameters<VigorRetry["target"]>[0]): VigorRetry => {
         return new VigorRetry().target(target)
     },
-    parse: (response: Parameters<VigorParse["target"]>[0]) => {
+    parse: (response: Parameters<VigorParse["target"]>[0]): VigorParse => {
         return new VigorParse().target(response)
     },
-    all: (...funcs: Parameters<VigorAll["target"]>[0][]) => {
+    all: (...funcs: Parameters<VigorAll["target"]>[0][]): VigorAll => {
         return  new VigorAll().target(...funcs)
     },
     builder: {
         fetch: {
-            settings: (c?: Partial<VigorFetchSettingsConfig>) => new VigorFetchSettings(c),
-            interceptors: (c?: Partial<VigorFetchInterceptorsConfig>) => new VigorFetchInterceptors(c),
+            settings: (c?: Partial<VigorFetchSettingsConfig>): VigorFetchSettings => new VigorFetchSettings(c),
+            interceptors: (c?: Partial<VigorFetchInterceptorsConfig>): VigorFetchInterceptors => new VigorFetchInterceptors(c),
         },
         retry: {
-            settings: (c?: Partial<VigorRetrySettingsConfig>) => new VigorRetrySettings(c),
-            interceptors: (c?: Partial<VigorRetryInterceptorsConfig>) => new VigorRetryInterceptors(c),
+            settings: (c?: Partial<VigorRetrySettingsConfig>): VigorRetrySettings => new VigorRetrySettings(c),
+            interceptors: (c?: Partial<VigorRetryInterceptorsConfig>): VigorRetryInterceptors => new VigorRetryInterceptors(c),
         },
         parse: {
-            settings: (c?: Partial<VigorParseSettingsConfig>) => new VigorParseSettings(c),
-            interceptors: (c?: Partial<VigorParseInterceptorsConfig>) => new VigorParseInterceptors(c),
+            settings: (c?: Partial<VigorParseSettingsConfig>): VigorParseSettings => new VigorParseSettings(c),
+            interceptors: (c?: Partial<VigorParseInterceptorsConfig>): VigorParseInterceptors => new VigorParseInterceptors(c),
         },
         all: {
-            settings: (c?: Partial<VigorAllSettingsConfig>) => new VigorAllSettings(c),
-            interceptors: (c?: Partial<VigorAllInterceptorsConfig>) => new VigorAllInterceptors(c),
+            settings: (c?: Partial<VigorAllSettingsConfig>): VigorAllSettings => new VigorAllSettings(c),
+            interceptors: (c?: Partial<VigorAllInterceptorsConfig>): VigorAllInterceptors => new VigorAllInterceptors(c),
         }
     }
 }

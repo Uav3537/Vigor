@@ -160,13 +160,13 @@ declare class VigorRetryAlgorithmsCustom extends VigorStatus<VigorRetryAlgorithm
 }
 type VigorRetryAlgorithmsConfig = (attempt: number) => number;
 type VigorRetryInterceptorsApi<R> = {
-    setResult: (unk: R) => R;
+    setResult: (unk: R) => void;
     throwError: <E extends Error>(err: E) => never;
     breakRetry: <E extends Error>(err: E) => never;
-    proceedRetry: () => true;
-    cancelRetry: () => false;
-    setDelay: <D extends number>(num: D) => D;
-    setAttempt: <A extends number>(num: A) => A;
+    proceedRetry: () => void;
+    cancelRetry: () => void;
+    setDelay: <D extends number>(num: D) => void;
+    setAttempt: <A extends number>(num: A) => void;
     restart: () => void;
     abort: <E extends Error>(err: E) => void;
 };
@@ -253,7 +253,7 @@ declare class VigorParseInterceptors extends VigorStatus<VigorParseInterceptorsC
     onError(...funcs: VigorIncludeSpread<VigorParseInterceptorsConfig["onError"][number]>): VigorParseInterceptors;
 }
 type VigorParseInterceptorsApi<R> = {
-    setResult: (unk: R) => R;
+    setResult: (unk: R) => void;
     throwError: <E extends Error>(err: E) => never;
 };
 type VigorParseInterceptorsFn<A extends keyof VigorParseInterceptorsApi<R>, R = unknown> = (ctx: VigorParseContext, api: Pick<VigorParseInterceptorsApi<R>, A>) => void | Promise<void>;
@@ -327,10 +327,10 @@ type VigorFetchConfig = {
     parseConfig: VigorParseConfig;
 };
 type VigorFetchInterceptorsApi<R> = {
-    setResult: (unk: R) => R;
-    setOptions: (unk: VigorFetchContext["options"]) => VigorFetchContext["options"];
-    setHeaders: (unk: VigorFetchConfig["options"]["headers"]) => VigorFetchConfig["options"]["headers"];
-    setBody: (unk: VigorFetchConfig["options"]["body"]) => VigorFetchConfig["options"]["body"];
+    setResult: (unk: R) => void;
+    setOptions: (unk: VigorFetchContext["options"]) => void;
+    setHeaders: (unk: VigorFetchConfig["options"]["headers"]) => void;
+    setBody: (unk: VigorFetchConfig["options"]["body"]) => void;
     throwError: <E extends Error>(err: E) => never;
     restart: () => void;
 };
@@ -400,11 +400,11 @@ type VigorAllConfig = {
     interceptors: VigorAllInterceptorsConfig;
 };
 type VigorAllInterceptorsApi<R> = {
-    setResult: (unk: Array<R>) => Array<R>;
+    setResult: (unk: Array<R>) => void;
     throwError: <E extends Error>(err: E) => never;
 };
 type VigorAllInterceptorsEachApi<R> = {
-    setResult: (unk: R) => R;
+    setResult: (unk: R) => void;
     throwError: <E extends Error>(err: E) => never;
 };
 type VigorAllInterceptorsFn<A extends keyof VigorAllInterceptorsApi<R>, R = unknown> = (ctx: VigorAllContext, api: Pick<VigorAllInterceptorsApi<R>, A>) => void | Promise<void>;
