@@ -121,7 +121,6 @@ const VigorDefault = Symbol("DEFAULT") as symbol & {
     __brand__: "Vigor_Default"
 }
 
-type VigorDefaultType = typeof VigorDefault
 type VigorIncludeSpread<T> = Array<T|Array<T>>
 
 
@@ -327,8 +326,79 @@ type VigorRetryContext = {
     attempt: number
     delay: number
     controller: AbortController
-    timeline: Array<{action: string, content?: unknown}>,
+    timeline: Array<VigorRetryTimelineItem<any, any>>
     stats: VigorRetryConfig
+    flag: {
+        broke: boolean
+        overwritten: boolean
+        restarted: boolean
+    }
+}
+
+type VigorRetryTimelineItem<I extends keyof VigorRetryInterceptorsFunctions, H extends keyof VigorRetryProcessHandler> = {
+    [K in keyof VigorRetryTimeline<I, H>]: {
+        action: K;
+        content: VigorRetryTimeline<I, H>[K];
+        time: number
+    }
+}[keyof VigorRetryTimeline<I, H>]
+
+type VigorRetryAllowedApis<I extends keyof VigorRetryInterceptorsFunctions> = 
+    VigorRetryInterceptorsFunctions[I] extends VigorRetryInterceptorsFn<infer A, any> 
+    ? A 
+    : never;
+
+type VigorRetryProcessHandler ={
+    REQUEST_START: {
+
+    },
+    REQUEST_ERROR: {
+        error: unknown
+    }
+    RETRY_START: {
+
+    },
+    RETRY_ERROR: {
+        error: unknown
+    },
+}
+
+type VigorRetryTimeline<I extends keyof VigorRetryInterceptorsFunctions, H extends keyof VigorRetryProcessHandler> = {
+    ATTEMPT_INCREASED: {
+        attempt: VigorRetryContext["attempt"]
+    }
+    PROCESS_HANDLING: {
+        type: H,
+        data: VigorRetryProcessHandler[H]
+    }
+    TARGET_REQUEST_STARTED: {
+        target: VigorRetryConfig["target"]
+    }
+    TARGET_REQUEST_ENDED: {
+        target: VigorRetryConfig["target"],
+        took: number
+    }
+    TARGET_API_CALLED: {
+        target: VigorRetryConfig["target"]
+        method: string
+    }
+    INTERCEPTOR_LOOP_STARTED: {
+        interceptorType: I
+        interceptors: Array<VigorRetryInterceptorsFunctions[I]>
+    }
+    INTERCEPTOR_LOOP_ENDED: {
+        interceptorType: I
+        interceptors: Array<VigorRetryInterceptorsFunctions[I]>
+        took: number
+    }
+    INTERCEPTOR_API_CALLED: {
+        [A in VigorRetryAllowedApis<I>]: {
+            interceptorType: I
+            interceptor: VigorRetryInterceptorsFunctions[I]
+            method: A
+            args: Parameters<VigorRetryInterceptorsApi<any>[A]>
+        }
+    }[VigorRetryAllowedApis<I>]
 }
 
 class VigorRetry extends VigorStatus<VigorRetryConfig, VigorRetry> {
@@ -347,6 +417,46 @@ class VigorRetry extends VigorStatus<VigorRetryConfig, VigorRetry> {
         linear: (config?: Partial<VigorRetryAlgorithmsLinearConfig>) => new VigorRetryAlgorithmsLinear(config),
         backoff: (config?: Partial<VigorRetryAlgorithmsBackoffConfig>) => new VigorRetryAlgorithmsBackoff(config),
         custom: (config?: Partial<VigorRetryAlgorithmsCustomConfig>) => new VigorRetryAlgorithmsCustom(config)
+    }
+    private _createTimelineHandler(timeline: VigorRetryContext["timeline"]) {
+        return <
+            I extends keyof VigorRetryInterceptorsFunctions,
+            H extends keyof VigorRetryProcessHandler,
+            K extends keyof VigorRetryTimeline<I, H>
+        >(
+            action: K,
+            content: VigorRetryTimeline<I, H>[K]
+        ) => {
+            timeline.push({
+                action: action,
+                content: content,
+                time: Date.now()
+            } as VigorRetryTimelineItem<any, any>);
+        };
+    }
+    private _createInterceptorHandler(ctx: VigorRetryContext, addTimeline: ReturnType<typeof this._createTimelineHandler>) {
+        return async<I extends keyof VigorRetryInterceptorsFunctions>(
+            interceptorType: I,
+            api: (interceptorType: I, func: VigorRetryInterceptorsFunctions[I]) => Pick<VigorRetryInterceptorsApi<any>, VigorRetryAllowedApis<I>>
+        ) => {
+            const interceptorsConfig = ctx["stats"]["interceptors"]
+            const interceptors = interceptorsConfig[interceptorType]
+            addTimeline("INTERCEPTOR_LOOP_STARTED", {
+                interceptorType: interceptorType,
+                interceptors,
+            })
+            const startTime = performance.now()
+            for(const func of interceptors) {
+                const scopedApi = api(interceptorType, func as VigorRetryInterceptorsFunctions[I])
+                await func(ctx, scopedApi as VigorRetryInterceptorsApi<any>)
+            }
+            const endTime = performance.now()
+            addTimeline("INTERCEPTOR_LOOP_ENDED", {
+                interceptorType: interceptorType,
+                interceptors,
+                took: endTime - startTime
+            })
+        };
     }
     
     public target(func: VigorRetryConfig["target"]) { return this._next({target: func}) }
@@ -380,11 +490,20 @@ class VigorRetry extends VigorStatus<VigorRetryConfig, VigorRetry> {
             controller: VigorDefault as unknown as VigorRetryContext["controller"],
             timeline: timeline,
             stats,
+            flag: {
+                broke: false,
+                overwritten: false,
+                restarted: false
+            }
         }
-        const throwError = <E extends Error>(error: E) => {
-            ctx.timeline.push({action: "throwError called", content: error})
-            throw error
-        }
+        const addTimeline = this._createTimelineHandler(ctx.timeline)
+        const handleInterceptor = this._createInterceptorHandler(ctx, addTimeline)
+
+        addTimeline("PROCESS_HANDLING", {
+            type: "REQUEST_START",
+            data: {}
+        })
+
         try {
             if(typeof stats.target !== 'function') throw new VigorRetryError("INVALID_TARGET", {
                 method: "request",
@@ -398,27 +517,53 @@ class VigorRetry extends VigorStatus<VigorRetryConfig, VigorRetry> {
             
             while(ctx.attempt < stats.settings.attempt) {
                 ctx.attempt++
-                ctx.timeline.push({action: "increased attempt", content: ctx.attempt})
-
-                let broke = false
-                const breakRetry = <E extends Error>(error: E) => {
-                    ctx.timeline.push({action: "breakRetry called", content: error})
-                    broke = true
-                    throw error
-                }
+                addTimeline("ATTEMPT_INCREASED", {
+                    attempt: ctx.attempt
+                })
+                
                 try {
-                    ctx.timeline.push({action: "process request_once handling", content: ctx.attempt})
+                    addTimeline("PROCESS_HANDLING", {
+                        type: "RETRY_START",
+                        data: {}
+                    })
                     
                     const controller = new AbortController()
                     const timeoutController = new AbortController()
                     const signal = AbortSignal.any([controller.signal, timeoutController.signal, ...stats.abortSignals])
 
-                    const abort = <E extends Error>(err: E) => controller.abort(err)
-                    ctx.timeline.push({action: "interceptor handling: before", content: stats.interceptors.before})
-                    for(const func of stats.interceptors.before) {
-                        await func(ctx, {throwError, breakRetry, abort})
-                    }
-
+                    await handleInterceptor("before", (interceptorType, func) => ({
+                        abort: <E extends Error>(error: E) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "abort",
+                                args: [error]
+                            })
+                            controller.abort(error)
+                            throw error
+                        },
+                        breakRetry: <E extends Error>(error: E) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "breakRetry",
+                                args: [error]
+                            })
+                            ctx.flag.broke = true
+                            throw error
+                        },
+                        throwError: <E extends Error>(error: E) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "throwError",
+                                args: [error]
+                            })
+                            throw error
+                        }
+                    }))
+                    
+                    
                     const timeoutTimer = setTimeout(() => {
                         clearTimeout(timeoutTimer)
                         timeoutController.abort(new VigorRetryError("TIMED_OUT", {
@@ -433,8 +578,19 @@ class VigorRetry extends VigorStatus<VigorRetryConfig, VigorRetry> {
                     signal.throwIfAborted()
 
                     let onAbort: ((reason?: unknown) => void) | undefined
-
                     try {
+                        addTimeline("TARGET_REQUEST_STARTED", {
+                            target: stats.target
+                        })
+                        const abort = <E extends Error>(error: E) => {
+                            addTimeline("TARGET_API_CALLED", {
+                                target: stats.target,
+                                method: "abort"
+                            });
+                            controller.abort(error);
+                            throw error;
+                        };
+                        const started = performance.now()
                         ctx.result = await Promise.race([
                             stats.target(ctx, {abort, signal}),
                             new Promise((_, rej) => {
@@ -442,63 +598,138 @@ class VigorRetry extends VigorStatus<VigorRetryConfig, VigorRetry> {
                                 signal.addEventListener("abort", onAbort)
                             })
                         ])
+                        const endTime = performance.now()
+                        addTimeline("TARGET_REQUEST_ENDED", {
+                            target: stats.target,
+                            took: endTime - started
+                        })
                     }
                     finally {
                         clearTimeout(timeoutTimer)
                         if (onAbort) signal.removeEventListener("abort", onAbort);
                     }
-                    
-                    const setResult = <R>(unk: R): R => {
-                        ctx.timeline.push({action: "setResult called", content: unk})
-                        ctx.result = unk
-                        return unk
-                    }
-                    ctx.timeline.push({action: "interceptor handling: after", content: stats.interceptors.after})
-                    for(const func of stats.interceptors.after) {
-                        await func(ctx, {setResult, throwError, breakRetry})
-                    }
-                    ctx.timeline.push({action: "interceptor handling: result", content: stats.interceptors.result})
-                    for(const func of stats.interceptors.result) {
-                        await func(ctx, {setResult, throwError})
-                    }
+
+                    await handleInterceptor("after", (interceptorType, func) => ({
+                        setResult: <R>(unknown: R): R => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "setResult",
+                                args: [unknown]
+                            })
+                            ctx.result = unknown
+                            return unknown
+                        },
+                        throwError: <E extends Error>(error: E) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "throwError",
+                                args: [error]
+                            })
+                            throw error
+                        },
+                        breakRetry: <E extends Error>(error: E) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "breakRetry",
+                                args: [error]
+                            })
+                            ctx.flag.broke = true
+                            throw error
+                        },
+                    }))
+
+                    await handleInterceptor("result", (interceptorType, func) => ({
+                        setResult: <R>(unknown: R): R => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "setResult",
+                                args: [unknown]
+                            })
+                            ctx.result = unknown
+                            return unknown
+                        },
+                        throwError: <E extends Error>(error: E) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "throwError",
+                                args: [error]
+                            })
+                            throw error
+                        },
+                    }))
                     return ctx.result as R
                 }
                 catch(error) {
                     ctx.error = error
-                    ctx.timeline.push({action: "process error_once handling", content: error})
-                    if(broke) throw error
+                    addTimeline("PROCESS_HANDLING", {
+                        type: "RETRY_ERROR",
+                        data: {
+                            error
+                        }
+                    })
+                    if(ctx.flag.broke) throw error
 
                     let proceed = true
-                    const proceedRetry = (): true => {
-                        ctx.timeline.push({action: "proceedRetry called", content: true})
-                        return proceed = true
-                    }
-                    const cancelRetry = (): false => {
-                        ctx.timeline.push({action: "cancelRetry called", content: false})
-                        return proceed = false
-                    }
 
-                    ctx.timeline.push({action: "interceptor handling: retryIf", content: stats.interceptors.result})
-                    for(const func of stats.interceptors.retryIf) {
-                        await func(ctx, {proceedRetry, cancelRetry})
-                    }
+                    await handleInterceptor("retryIf", (interceptorType, func) => ({
+                        proceedRetry: (): true => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "proceedRetry",
+                                args: []
+                            })
+                            return proceed = true
+                        },
+                        cancelRetry: (): false => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "cancelRetry",
+                                args: []
+                            })
+                            return proceed = false
+                        }
+                    }))
+
                     if(!proceed) throw error
 
                     ctx.delay = VigorDefault as unknown as VigorRetryContext["delay"]
 
-                    const setDelay = <D extends number>(num: D): D => {
-                        ctx.timeline.push({action: "setDelay called", content: num})
-                        return ctx.delay = num
-                    }
-                    const setAttempt = <A extends number>(num: A): A => {
-                        ctx.timeline.push({action: "setAttempt called", content: num})
-                        return ctx.attempt = num
-                    }
-                    
-                    ctx.timeline.push({action: "interceptor handling: onRetry", content: stats.interceptors.onRetry})
-                    for(const func of stats.interceptors.onRetry) {
-                        await func(ctx, {throwError, setDelay, setAttempt})
-                    }
+                    await handleInterceptor("onRetry", (interceptorType, func) => ({
+                        throwError: <E extends Error>(error: E) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "throwError",
+                                args: [error]
+                            })
+                            throw error
+                        },
+                        setDelay: <D extends number>(number: D): D => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "setDelay",
+                                args: [number]
+                            })
+                            return ctx.delay = number
+                        },
+                        setAttempt: <A extends number>(number: A): A => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "setAttempt",
+                                args: [number]
+                            })
+                            return ctx.attempt = number
+                        }
+                    }))
 
                     if(typeof ctx.delay !== 'number') ctx.delay = stats.algorithm(ctx.attempt) + Math.random() * stats.settings.jitter
                     const delay = ctx.delay
@@ -515,26 +746,48 @@ class VigorRetry extends VigorStatus<VigorRetryConfig, VigorRetry> {
         }
         catch(error) {
             ctx.error = error
-            let overwritten = false
-            const setResult = <R>(unk: R): R => {
-                ctx.timeline.push({action: "setResult called", content: unk})
-                ctx.result = unk
-                overwritten = true
-                return unk
-            }
-            let restarted = false
-            const restart = () => {
-                ctx.timeline.push({action: "restart called"})
-                restarted = true
-            }
-            ctx.timeline.push({action: "interceptor handling: onError", content: stats.interceptors.onError})
-            for(const func of stats.interceptors.onError) {
-                await func(ctx, {setResult, throwError, restart})
-            }
-            if(restarted) {
+            addTimeline("PROCESS_HANDLING", {
+                type: "REQUEST_ERROR",
+                data: {
+                    error
+                }
+            })
+
+            await handleInterceptor("onError", (interceptorType, func) => ({
+                setResult: <R>(unknown: R): R => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    })
+                    ctx.result = unknown
+                    ctx.flag.overwritten = true
+                    return unknown
+                },
+                throwError: <E extends Error>(error: E) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    })
+                    throw error
+                },
+                restart: () => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "restart",
+                        args: []
+                    })
+                    ctx.flag.restarted = true
+                }
+            }))
+            if(ctx.flag.restarted) {
                 return await this.request<R>(stats, ctx.timeline)
             }
-            if(overwritten) return ctx.result as R
+            if(ctx.flag.overwritten) return ctx.result as R
             if(stats.settings.default !== VigorDefault) return stats.settings.default as R
             throw error
         }
@@ -569,7 +822,6 @@ class VigorParseStrategies extends VigorStatus<VigorParseStrategiesConfig, Vigor
             funcs: []
         }
         super(config, base, (c) => new VigorParseStrategies(c))
-        this._config.funcs.push(this.ParseAutoAlgorithms.contentType)
     }
 
     private ParseAutoHeaders = [
@@ -702,10 +954,59 @@ type VigorParseConfig = {
 
 type VigorParseContext = {
     stats: VigorParseConfig
-    timeline: Array<{action: string, content?: unknown}>,
+    timeline: Array<VigorParseTimelineItem<any, any>>,
     result: unknown,
     error: unknown
     response: Response
+    flag: {
+        overwritten: boolean
+    }
+}
+
+type VigorParseTimelineItem<I extends keyof VigorParseInterceptorsFunctions, H extends keyof VigorParseProcessHandler> = {
+    [K in keyof VigorParseTimeline<I, H>]: {
+        action: K;
+        content: VigorParseTimeline<I, H>[K];
+        time: number
+    }
+}[keyof VigorParseTimeline<I, H>]
+
+type VigorParseAllowedApis<I extends keyof VigorParseInterceptorsFunctions> = 
+    VigorParseInterceptorsFunctions[I] extends VigorParseInterceptorsFn<infer A, any> 
+    ? A 
+    : never;
+
+type VigorParseProcessHandler = {
+    REQUEST_START: {
+
+    },
+    REQUEST_ERROR: {
+        error: unknown
+    }
+}
+
+type VigorParseTimeline<I extends keyof VigorParseInterceptorsFunctions, H extends keyof VigorParseProcessHandler> = {
+    PROCESS_HANDLING: {
+        type: H,
+        data: VigorRetryProcessHandler[H]
+    }
+    INTERCEPTOR_LOOP_STARTED: {
+        interceptorType: I
+        interceptors: Array<VigorParseInterceptorsFunctions[I]>
+    }
+    INTERCEPTOR_LOOP_ENDED: {
+        interceptorType: I
+        interceptors: Array<VigorParseInterceptorsFunctions[I]>
+        took: number
+    }
+    INTERCEPTOR_API_CALLED: {
+        [A in VigorParseAllowedApis<I>]: {
+            interceptorType: I
+            interceptor: VigorParseInterceptorsFunctions[I]
+            method: A
+            args: Parameters<VigorParseInterceptorsApi<any>[A]>
+        }
+    }[VigorParseAllowedApis<I>]
 }
 
 class VigorParse extends VigorStatus<VigorParseConfig, VigorParse> {
@@ -718,6 +1019,47 @@ class VigorParse extends VigorStatus<VigorParseConfig, VigorParse> {
         }
         super(config, base, (c) => new VigorParse(c))
     }
+    private _createTimelineHandler(timeline: VigorParseContext["timeline"]) {
+        return <
+            I extends keyof VigorParseInterceptorsFunctions,
+            H extends keyof VigorParseProcessHandler,
+            K extends keyof VigorParseTimeline<I, H>
+        >(
+            action: K,
+            content: VigorParseTimeline<I, H>[K]
+        ) => {
+            timeline.push({
+                action: action,
+                content: content,
+                time: Date.now()
+            } as VigorParseTimelineItem<any, any>);
+        };
+    }
+    private _createInterceptorHandler(ctx: VigorParseContext, addTimeline: ReturnType<typeof this._createTimelineHandler>) {
+        return async<I extends keyof VigorParseInterceptorsFunctions>(
+            interceptorType: I,
+            api: (interceptorType: I, func: VigorParseInterceptorsFunctions[I]) => Pick<VigorParseInterceptorsApi<any>, VigorParseAllowedApis<I>>
+        ) => {
+            const interceptorsConfig = ctx["stats"]["interceptors"]
+            const interceptors = interceptorsConfig[interceptorType]
+            addTimeline("INTERCEPTOR_LOOP_STARTED", {
+                interceptorType: interceptorType,
+                interceptors,
+            })
+            const startTime = performance.now()
+            for(const func of interceptors) {
+                const scopedApi = api(interceptorType, func as VigorParseInterceptorsFunctions[I])
+                await func(ctx, scopedApi as VigorRetryInterceptorsApi<any>)
+            }
+            const endTime = performance.now()
+            addTimeline("INTERCEPTOR_LOOP_ENDED", {
+                interceptorType: interceptorType,
+                interceptors,
+                took: endTime - startTime
+            })
+        };
+    }
+
     public target(response: VigorParseConfig["target"]) { return this._next({target: response}) }
     public settings(func: ((i: VigorParseSettings) => VigorParseSettings) | VigorParseConfig["settings"]) {
         if(typeof func === 'function') {
@@ -748,12 +1090,18 @@ class VigorParse extends VigorStatus<VigorParseConfig, VigorParse> {
             response: target as Response,
             result: VigorDefault,
             error: VigorDefault,
+            flag: {
+                overwritten: false
+            }
         }
+        const addTimeline = this._createTimelineHandler(ctx.timeline)
+        const handleInterceptor = this._createInterceptorHandler(ctx, addTimeline)
 
-        const throwError = <E extends Error>(err: E) => {
-            ctx.timeline.push({action: "throwError called", content: err})
-            throw err
-        }
+        addTimeline("PROCESS_HANDLING", {
+            type: "REQUEST_START",
+            data: {}
+        })
+
         try {
             if(target === VigorDefault as unknown) throw new VigorParseError("INVALID_TARGET", {
                 method: "request",
@@ -764,10 +1112,18 @@ class VigorParse extends VigorStatus<VigorParseConfig, VigorParse> {
                 context: ctx
             })
 
-            ctx.timeline.push({action: "interceptor handling: before", content: stats.interceptors.before})
-            for(const func of stats.interceptors.before) {
-                await func(ctx, {throwError})
-            }
+            await handleInterceptor("before", (interceptorType, func) => ({
+                throwError: <E extends Error>(error: E) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    })
+                    throw error
+                },
+            }))
+
             if(stats.settings.raw) {
                 ctx.result = ctx.response
             }
@@ -796,38 +1152,87 @@ class VigorParse extends VigorStatus<VigorParseConfig, VigorParse> {
                     context: ctx
                 })
             }
-            
-            const setResult = <R>(unk: R): R => {
-                ctx.timeline.push({action: "setResult called", content: unk})
-                ctx.result = unk
-                return unk
-            }
-            ctx.timeline.push({action: "interceptor handling: after", content: stats.interceptors.after})
-            for(const func of stats.interceptors.after) {
-                await func(ctx, {setResult, throwError})
-            }
 
-            ctx.timeline.push({action: "interceptor handling: result", content: stats.interceptors.result})
-            for(const func of stats.interceptors.result) {
-                await func(ctx, {setResult, throwError})
-            }
+            await handleInterceptor("after", (interceptorType, func) => ({
+                setResult: <R>(unknown: R): R => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    })
+                    ctx.result = unknown
+                    return unknown
+                },
+                throwError: <E extends Error>(error: E) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    })
+                    throw error
+                },
+            }))
+
+            await handleInterceptor("result", (interceptorType, func) => ({
+                setResult: <R>(unknown: R): R => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    })
+                    ctx.result = unknown
+                    return unknown
+                },
+                throwError: <E extends Error>(error: E) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    })
+                    throw error
+                },
+            }))
+
             return ctx.result as R
         }
         catch(error) {
             ctx.error = error
-            let overwritten = false
-            const setResult = <R>(unk: R): R => {
-                ctx.timeline.push({action: "setResult called", content: unk})
-                ctx.result = unk
-                overwritten = true
-                return unk
-            }
 
-            ctx.timeline.push({action: "interceptor handling: onError", content: stats.interceptors.onError})
-            for(const func of stats.interceptors.onError) {
-                await func(ctx, {setResult, throwError})
-            }
-            if(overwritten) return ctx.result as R
+            addTimeline("PROCESS_HANDLING", {
+                type: "REQUEST_ERROR",
+                data: {
+                    error
+                }
+            })
+
+            await handleInterceptor("onError", (interceptorType, func) => ({
+                setResult: <R>(unknown: R): R => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    })
+                    ctx.result = unknown
+                    ctx.flag.overwritten = true
+                    return unknown
+                },
+                throwError: <E extends Error>(error: E) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    })
+                    throw error
+                },
+            }))
+
+            if(ctx.flag.overwritten) return ctx.result as R
             if(stats.settings.default !== VigorDefault) return stats.settings.default as R
             throw error
         }
@@ -884,7 +1289,10 @@ type VigorFetchOptions<T = Record<string, any>> = {
     body?: XMLHttpRequestBodyInit | object | null
 } & T
 
+type VigorStringable = string | number | boolean | null | undefined | Date
+
 type VigorFetchConfig = {
+    method?: "GET"|"POST"|"PUT"|"PATCH"|"DELETE"|"HEAD"|"OPTIONS"|"CONNECT"|"TRACE"
     origin: Array<string>
     path: Array<string>
     query: Array<Record<string, VigorStringable|Array<VigorStringable>>>
@@ -923,11 +1331,87 @@ type VigorFetchContext = {
     result: unknown
     error: unknown
     options: VigorFetchOptions
-    timeline: Array<{action: string, content?: unknown}>
+    timeline: Array<VigorFetchTimelineItem<any, any>>
     stats: VigorFetchConfig
+    flag: {
+        overwritten: boolean
+        restarted: boolean
+    }
 }
 
-type VigorStringable = string | number | boolean | null | undefined | Date
+type VigorFetchTimelineItem<I extends keyof VigorFetchInterceptorsFunctions, H extends keyof VigorFetchProcessHandler> = {
+    [K in keyof VigorFetchTimeline<I, H>]: {
+        action: K;
+        content: VigorFetchTimeline<I, H>[K];
+        time: number
+    }
+}[keyof VigorFetchTimeline<I, H>]
+
+type VigorFetchAllowedApis<I extends keyof VigorFetchInterceptorsFunctions> = 
+    VigorFetchInterceptorsFunctions[I] extends VigorFetchInterceptorsFn<infer A, any> 
+    ? A 
+    : never;
+
+type VigorFetchProcessHandler = {
+    REQUEST_START: {
+
+    },
+    REQUEST_ERROR: {
+        error: unknown
+    }
+}
+
+type VigorFetchTimeline<I extends keyof VigorFetchInterceptorsFunctions, H extends keyof VigorFetchProcessHandler> = {
+    PROCESS_HANDLING: {
+        type: H,
+        data: VigorFetchProcessHandler[H]
+    }
+    BUILT_URL: {
+        url: ReturnType<VigorFetch["_buildUrl"]>
+    }
+    SET_OPTIONS: {
+        options: VigorFetchContext["options"]
+    }
+    ENGINE_CREATED: {
+        retryEngine: VigorRetry
+        parseEngine: VigorParse
+    }
+    RETRY_STARTED: {
+        engine: VigorRetry
+    }
+    RETRY_ENDED: {
+        engine: VigorRetry
+        timeline: VigorRetryContext["timeline"]
+        took: number
+        response: VigorFetchContext["response"]
+    }
+    PARSE_STARTED: {
+        engine: VigorParse
+    }
+    PARSE_ENDED: {
+        engine: VigorParse
+        timeline: VigorParseContext["timeline"]
+        took: number
+        result: VigorFetchContext["result"]
+    }
+    INTERCEPTOR_LOOP_STARTED: {
+        interceptorType: I
+        interceptors: Array<VigorFetchInterceptorsFunctions[I]>
+    }
+    INTERCEPTOR_LOOP_ENDED: {
+        interceptorType: I
+        interceptors: Array<VigorFetchInterceptorsFunctions[I]>
+        took: number
+    }
+    INTERCEPTOR_API_CALLED: {
+        [A in VigorFetchAllowedApis<I>]: {
+            interceptorType: I
+            interceptor: VigorFetchInterceptorsFunctions[I]
+            method: A
+            args: Parameters<VigorFetchInterceptorsApi<any>[A]>
+        }
+    }[VigorFetchAllowedApis<I>]
+}
 
 class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
     constructor(config?: Partial<VigorFetchConfig>) {
@@ -947,7 +1431,46 @@ class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
         }
         super(config, base, (c) => new VigorFetch(c))
     }
-    
+    private _createTimelineHandler(timeline: VigorFetchContext["timeline"]) {
+        return <
+            I extends keyof VigorFetchInterceptorsFunctions,
+            H extends keyof VigorFetchProcessHandler,
+            K extends keyof VigorFetchTimeline<I, H>
+        >(
+            action: K,
+            content: VigorFetchTimeline<I, H>[K]
+        ) => {
+            timeline.push({
+                action: action,
+                content: content,
+                time: Date.now()
+            } as VigorFetchTimelineItem<any, any>);
+        };
+    }
+    private _createInterceptorHandler(ctx: VigorFetchContext, addTimeline: ReturnType<typeof this._createTimelineHandler>) {
+        return async<I extends keyof VigorFetchInterceptorsFunctions>(
+            interceptorType: I,
+            api: (interceptorType: I, func: VigorFetchInterceptorsFunctions[I]) => Pick<VigorFetchInterceptorsApi<any>, VigorParseAllowedApis<I>>
+        ) => {
+            const interceptorsConfig = ctx["stats"]["interceptors"]
+            const interceptors = interceptorsConfig[interceptorType]
+            addTimeline("INTERCEPTOR_LOOP_STARTED", {
+                interceptorType: interceptorType,
+                interceptors,
+            })
+            const startTime = performance.now()
+            for(const func of interceptors) {
+                const scopedApi = api(interceptorType, func as VigorFetchInterceptorsFunctions[I])
+                await func(ctx, scopedApi as VigorFetchInterceptorsApi<any>)
+            }
+            const endTime = performance.now()
+            addTimeline("INTERCEPTOR_LOOP_ENDED", {
+                interceptorType: interceptorType,
+                interceptors,
+                took: endTime - startTime
+            })
+        };
+    }
     private _stringifyList(unkList: Array<VigorStringable>): Array<string> {
         return unkList
             .filter(unk => unk !== null && unk !== undefined)
@@ -956,6 +1479,7 @@ class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
             return String(unk)
         })
     }
+    public method(str: VigorFetchConfig["method"]) { return this._next({ method: str }) }
     public origin(...strs: VigorIncludeSpread<VigorStringable>) { return this._next({ origin: this._stringifyList(strs.flat()) }) }
     public path(...strs: VigorIncludeSpread<VigorStringable>) { return this._next({ path: this._stringifyList(strs.flat()) }) }
     public query(...strs: VigorIncludeSpread<VigorFetchConfig["query"][number]>) { return this._next({query: strs.flat()}) }
@@ -1064,11 +1588,18 @@ class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
             error: VigorDefault,
             timeline: timeline,
             stats,
+            flag: {
+                overwritten: false,
+                restarted: false
+            }
         }
-        const throwError = <E extends Error>(err: E) => {
-            ctx.timeline.push({action: "throwError called", content: err})
-            throw err
-        }
+        const addTimeline = this._createTimelineHandler(ctx.timeline)
+        const handleInterceptor = this._createInterceptorHandler(ctx, addTimeline)
+
+        addTimeline("PROCESS_HANDLING", {
+            type: "REQUEST_START",
+            data: {}
+        })
 
         try {
             try {
@@ -1089,41 +1620,31 @@ class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
                 stats.query,
                 stats.hash
             )
+            addTimeline("BUILT_URL", {
+                url: ctx.href
+            })
 
             const { headers, body, ...others } = stats.options
-
-            ctx.options = {
-                ...others,
-                headers: {}
-            }
             const hasBody =
                 body !== VigorDefault &&
                 body !== undefined
+            const method = stats.method || (hasBody ? 'POST' : 'GET');
+            ctx.options = {
+                ...others,
+                method: method,
+                headers: {}
+            }
             if (hasBody) {
                 const normalized = this._normalizeOptions(body)
-
                 if (normalized.body !== undefined) {
                     ctx.options.body = normalized.body
                 }
-
                 Object.assign(ctx.options.headers, normalized.headers)
             }
-
             Object.assign(ctx.options.headers, headers)
-            ctx.timeline.push({action: "options set", content: ctx.options})
-
-            const setOptions = (unk: VigorFetchConfig["options"]): VigorFetchConfig["options"] => {
-                ctx.timeline.push({action: "setOptions called", content: unk})
-                return ctx.options = unk
-            }
-            const setHeaders = (unk: VigorFetchConfig["options"]["headers"]): VigorFetchConfig["options"]["headers"] => {
-                ctx.timeline.push({action: "setHeaders called", content: unk})
-                return ctx.options.headers = unk
-            }
-            const setBody = (unk: VigorFetchConfig["options"]["body"]): VigorFetchConfig["options"]["body"] => {
-                ctx.timeline.push({action: "setBody called", content: unk})
-                return ctx.options.body = unk
-            }
+            addTimeline("SET_OPTIONS", {
+                options: ctx.options
+            })
 
             const fetchTask: VigorRetryConfig["target"] = async(ctx2, {abort, signal}) => {
                 ctx.options.signal = signal
@@ -1179,61 +1700,175 @@ class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
                     }
                 }
             }
-            stats.retryConfig.interceptors.after.unshift(throwStatus)
-            stats.retryConfig.interceptors.retryIf.unshift(handleBlacklist)
-            stats.retryConfig.interceptors.onRetry.unshift(handleRatelimit)
+            stats.retryConfig.interceptors.after = [throwStatus, ...stats.retryConfig.interceptors.after]
+            stats.retryConfig.interceptors.retryIf = [handleBlacklist, ...stats.retryConfig.interceptors.retryIf]
+            stats.retryConfig.interceptors.onRetry = [handleRatelimit, ...stats.retryConfig.interceptors.onRetry]
+
             const retryEngine = new VigorRetry(stats.retryConfig)
                 .target(fetchTask)
             const parseEngine = new VigorParse(stats.parseConfig)
-            
-            ctx.timeline.push({action: "interceptor handling: before", content: stats.interceptors.before})
-            for(const func of stats.interceptors.before) {
-                await func(ctx, {throwError, setOptions, setHeaders, setBody})
-            }
-            ctx.response = await retryEngine.request<Response>(undefined, timeline)
-            ctx.result = await parseEngine.target(ctx.response).request<R>(undefined, timeline)
-            const setResult = <R>(unk: R): R => {
-                ctx.timeline.push({action: "setResult called", content: unk})
-                ctx.result = unk
-                return unk
-            }
+            addTimeline("ENGINE_CREATED", {
+                retryEngine,
+                parseEngine
+            })
 
-            ctx.timeline.push({action: "interceptor handling: after", content: stats.interceptors.after})
-            for(const func of stats.interceptors.after) {
-                await func(ctx, {setResult, throwError})
-            }
+            await handleInterceptor("before", (interceptorType, func) => ({
+                throwError: <E extends Error>(error: E) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    })
+                    throw error
+                },
+                setOptions: (unknown: VigorFetchConfig["options"]): VigorFetchConfig["options"] => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setOptions",
+                        args: [unknown]
+                    })
+                    return ctx.options = unknown
+                },
+                setHeaders: (unknown: VigorFetchConfig["options"]["headers"]): VigorFetchConfig["options"]["headers"] => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setHeaders",
+                        args: [unknown]
+                    })
+                    return ctx.options.headers = unknown
+                },
+                setBody: (unknown: VigorFetchConfig["options"]["body"]): VigorFetchConfig["options"]["body"] => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setBody",
+                        args: [unknown]
+                    })
+                    return ctx.options.body = unknown
+                }
+            }))
 
-            ctx.timeline.push({action: "interceptor handling: result", content: stats.interceptors.result})
-            for(const func of stats.interceptors.result) {
-                await func(ctx, {setResult, throwError})
-            }
+            addTimeline("RETRY_STARTED", {
+                engine: retryEngine
+            })
+            const retryStart = performance.now()
+            const retryTimeline: VigorRetryContext["timeline"] = []
+            ctx.response = await retryEngine.request<Response>(undefined, retryTimeline)
+            const retryEnd = performance.now()
+            addTimeline("RETRY_ENDED", {
+                engine: retryEngine,
+                timeline: retryTimeline,
+                took: retryEnd - retryStart,
+                response: ctx.response
+            })
+
+            addTimeline("PARSE_STARTED", {
+                engine: parseEngine
+            })
+            const parseStart = performance.now()
+            const parseTimeline: VigorParseContext["timeline"] = []
+            ctx.result = await parseEngine.target(ctx.response).request<R>(undefined, parseTimeline)
+            const parseEnd = performance.now()
+            addTimeline("PARSE_ENDED", {
+                engine: parseEngine,
+                timeline: parseTimeline,
+                took: parseEnd - parseStart,
+                result: ctx.result
+            })
+
+            await handleInterceptor("after", (interceptorType, func) => ({
+                setResult: <R>(unknown: R): R => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    })
+                    ctx.result = unknown
+                    return unknown
+                },
+                throwError: <E extends Error>(error: E) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    })
+                    throw error
+                },
+            }))
+
+            await handleInterceptor("result", (interceptorType, func) => ({
+                setResult: <R>(unknown: R): R => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    })
+                    ctx.result = unknown
+                    return unknown
+                },
+                throwError: <E extends Error>(error: E) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    })
+                    throw error
+                },
+            }))
             return ctx.result as R
         }
         catch(error) {
             ctx.error = error
 
-            let overwritten = false
-            const setResult = <R>(unk: R): R => {
-                ctx.timeline.push({action: "setResult called", content: unk})
-                ctx.result = unk
-                overwritten = true
-                return unk
-            }
+            addTimeline("PROCESS_HANDLING", {
+                type: "REQUEST_ERROR",
+                data: {
+                    error
+                }
+            })
 
-            let restarted = false
-            const restart = () => {
-                ctx.timeline.push({action: "restart called"})
-                restarted = true
+            await handleInterceptor("onError", (interceptorType, func) => ({
+                setResult: <R>(unknown: R): R => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    })
+                    ctx.result = unknown
+                    ctx.flag.overwritten = true
+                    return unknown
+                },
+                throwError: <E extends Error>(error: E) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    })
+                    throw error
+                },
+                restart: () => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "restart",
+                        args: []
+                    })
+                    ctx.flag.restarted = true
+                }
+            }))
+            if(ctx.flag.restarted) {
+                return await this.request<R>(stats, ctx.timeline)
             }
-
-            ctx.timeline.push({action: "interceptor handling: onError", content: stats.interceptors.onError})
-            for(const func of stats.interceptors.onError) {
-                await func(ctx, {setResult, throwError, restart})
-            }
-            if(restarted) {
-                return await this.request<R>(stats, timeline)
-            }
-            if(overwritten) return ctx.result as R
+            if(ctx.flag.overwritten) return ctx.result as R
             if(stats.settings.default !== VigorDefault) return stats.settings.default as R
             throw error
         }
@@ -1258,10 +1893,10 @@ class VigorAllSettings extends VigorStatus<VigorAllSettingsConfig, VigorAllSetti
 }
 
 type VigorAllInterceptorsConfig = {
-    before: Array<VigorAllInterceptorsFunctions["before"]>
-    after: Array<VigorAllInterceptorsFunctions["after"]>
+    before: Array<VigorAllEachInterceptorsFunctions["before"]>
+    after: Array<VigorAllEachInterceptorsFunctions["after"]>
     result: Array<VigorAllInterceptorsFunctions["result"]>
-    onError: Array<VigorAllInterceptorsFunctions["onError"]>
+    onError: Array<VigorAllEachInterceptorsFunctions["onError"]>
 }
 
 class VigorAllInterceptors extends VigorStatus<VigorAllInterceptorsConfig, VigorAllInterceptors> {
@@ -1291,7 +1926,7 @@ type VigorAllInterceptorsApi<R> = {
     throwError: <E extends Error>(err: E) => never
 }
 
-type VigorAllInterceptorsEachApi<R> = {
+type VigorAllEachInterceptorsApi<R> = {
     setResult: (unk: R) => void
     throwError: <E extends Error>(err: E) => never
 }
@@ -1301,21 +1936,24 @@ type VigorAllInterceptorsFn<A extends keyof VigorAllInterceptorsApi<R>, R = unkn
     api: Pick<VigorAllInterceptorsApi<R>, A>
 ) => void|Promise<void>
 
-type VigorAllInterceptorsEachFn<A extends keyof VigorAllInterceptorsApi<R>, R = unknown> = (
+type VigorAllEachInterceptorsFn<A extends keyof VigorAllInterceptorsApi<R>, R = unknown> = (
     ctx: VigorAllEachContext,
-    api: Pick<VigorAllInterceptorsEachApi<R>, A>
+    api: Pick<VigorAllEachInterceptorsApi<R>, A>
 ) => void|Promise<void>
 
 type VigorAllInterceptorsFunctions = {
-    before: VigorAllInterceptorsEachFn<"throwError">
-    after: VigorAllInterceptorsEachFn<"setResult" | "throwError">
     result: VigorAllInterceptorsFn<"setResult" | "throwError">
-    onError: VigorAllInterceptorsEachFn<"setResult" | "throwError">
+}
+
+type VigorAllEachInterceptorsFunctions = {
+    before: VigorAllEachInterceptorsFn<"throwError">
+    after: VigorAllEachInterceptorsFn<"setResult" | "throwError">
+    onError: VigorAllEachInterceptorsFn<"setResult" | "throwError">
 }
 
 type VigorAllContext = {
     result: Array<unknown>
-    timeline: Array<{action: string, content: unknown}>
+    timeline: Array<VigorAllTimelineItem<any, any>>
     stats: VigorAllConfig
     queue: Set<Promise<{success: boolean, value: unknown}>>
 }
@@ -1323,7 +1961,7 @@ type VigorAllContext = {
 type VigorAllEachContext = {
     result: unknown
     error: unknown
-    timeline: Array<{action: string, content: unknown}>
+    timeline: Array<VigorAllEachTimelineItem<any, any>>
     stats: VigorAllConfig
     root: VigorAllContext
     target: VigorAllConfig["target"][number]
@@ -1331,6 +1969,124 @@ type VigorAllEachContext = {
         acquire: () => Promise<void>
         release: () => void
     }
+    flag: {
+        overwritten: boolean
+    }
+}
+
+type VigorAllTimelineItem<I extends keyof VigorAllInterceptorsFunctions, H extends keyof VigorAllProcessHandler> = {
+    [K in keyof VigorAllTimeline<I, H>]: {
+        action: K;
+        content: VigorAllTimeline<I, H>[K];
+        time: number
+    }
+}[keyof VigorAllTimeline<I, H>]
+
+type VigorAllAllowedApis<I extends keyof VigorAllInterceptorsFunctions> = 
+    VigorAllInterceptorsFunctions[I] extends VigorAllInterceptorsFn<infer A, any> 
+    ? A 
+    : never;
+
+type VigorAllProcessHandler = {
+    REQUEST_START: {
+
+    },
+    REQUEST_ERROR: {
+        error: unknown
+    }
+}
+
+type VigorAllTimeline<I extends keyof VigorAllInterceptorsFunctions, H extends keyof VigorAllProcessHandler> = {
+    PROCESS_HANDLING: {
+        type: H,
+        data: VigorAllProcessHandler[H]
+    }
+    QUEUE_REQUEST_STARTED: {
+        queue: VigorAllContext["queue"]
+    }
+    QUEUE_REQUEST_ENDED: {
+        queue: VigorAllContext["queue"]
+        took: number
+    }
+    INTERCEPTOR_LOOP_STARTED: {
+        interceptorType: I
+        interceptors: Array<VigorAllInterceptorsFunctions[I]>
+    }
+    INTERCEPTOR_LOOP_ENDED: {
+        interceptorType: I
+        interceptors: Array<VigorAllInterceptorsFunctions[I]>
+        took: number
+    }
+    INTERCEPTOR_API_CALLED: {
+        [A in VigorAllAllowedApis<I>]: {
+            interceptorType: I
+            interceptor: VigorAllInterceptorsFunctions[I]
+            method: A
+            args: Parameters<VigorAllInterceptorsApi<any>[A]>
+        }
+    }[VigorAllAllowedApis<I>]
+}
+
+
+
+
+type VigorAllEachTimelineItem<I extends keyof VigorAllEachInterceptorsFunctions, H extends keyof VigorAllEachProcessHandler> = {
+    [K in keyof VigorAllEachTimeline<I, H>]: {
+        action: K;
+        content: VigorAllEachTimeline<I, H>[K];
+        time: number
+    }
+}[keyof VigorAllEachTimeline<I, H>]
+
+type VigorAllEachAllowedApis<I extends keyof VigorAllEachInterceptorsFunctions> = 
+    VigorAllEachInterceptorsFunctions[I] extends VigorAllEachInterceptorsFn<infer A, any> 
+    ? A 
+    : never;
+
+type VigorAllEachProcessHandler = {
+    TASK_START: {
+
+    },
+    TASK_ERROR: {
+        error: unknown
+    }
+}
+
+type VigorAllEachTimeline<I extends keyof VigorAllEachInterceptorsFunctions, H extends keyof VigorAllEachProcessHandler> = {
+    PROCESS_HANDLING: {
+        type: H,
+        data: VigorAllEachProcessHandler[H]
+    }
+    TASK_ACQUIRED: {
+        target: VigorAllEachContext["target"]
+    }
+    TASK_RELEASED: {
+        target: VigorAllEachContext["target"]
+    }
+    TASK_STARTED: {
+        target: VigorAllEachContext["target"]
+    }
+    TASK_ENDED: {
+        target: VigorAllEachContext["target"]
+        took: number
+    }
+    INTERCEPTOR_LOOP_STARTED: {
+        interceptorType: I
+        interceptors: Array<VigorAllEachInterceptorsFunctions[I]>
+    }
+    INTERCEPTOR_LOOP_ENDED: {
+        interceptorType: I
+        interceptors: Array<VigorAllEachInterceptorsFunctions[I]>
+        took: number
+    }
+    INTERCEPTOR_API_CALLED: {
+        [A in VigorAllEachAllowedApis<I>]: {
+            interceptorType: I
+            interceptor: VigorAllEachInterceptorsFunctions[I]
+            method: A
+            args: Parameters<VigorAllEachInterceptorsApi<any>[A]>
+        }
+    }[VigorAllEachAllowedApis<I>]
 }
 
 class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
@@ -1342,6 +2098,89 @@ class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
         }
         super(config, base, (c) => new VigorAll(c))
     }
+    private _createTimelineHandler(timeline: VigorAllContext["timeline"]) {
+        return <
+            I extends keyof VigorAllInterceptorsFunctions,
+            H extends keyof VigorAllProcessHandler,
+            K extends keyof VigorAllTimeline<I, H>
+        >(
+            action: K,
+            content: VigorAllTimeline<I, H>[K]
+        ) => {
+            timeline.push({
+                action: action,
+                content: content,
+                time: Date.now()
+            } as VigorAllTimelineItem<any, any>);
+        };
+    }
+    private _createInterceptorHandler(ctx: VigorAllContext, addTimeline: ReturnType<typeof this._createTimelineHandler>) {
+        return async<I extends keyof VigorAllInterceptorsFunctions>(
+            interceptorType: I,
+            api: (interceptorType: I, func: VigorAllInterceptorsFunctions[I]) => Pick<VigorAllInterceptorsApi<any>, VigorAllAllowedApis<I>>
+        ) => { 
+            const interceptorsConfig = ctx["stats"]["interceptors"]
+            const interceptors = interceptorsConfig[interceptorType]
+            addTimeline("INTERCEPTOR_LOOP_STARTED", {
+                interceptorType: interceptorType,
+                interceptors,
+            })
+            const startTime = performance.now()
+            for(const func of interceptors) {
+                const scopedApi = api(interceptorType, func as VigorAllInterceptorsFunctions[I])
+                await func(ctx, scopedApi as VigorAllInterceptorsApi<any>)
+            }
+            const endTime = performance.now()
+            addTimeline("INTERCEPTOR_LOOP_ENDED", {
+                interceptorType: interceptorType,
+                interceptors,
+                took: endTime - startTime
+            })
+        };
+    }
+
+    private _createEachTimelineHandler(timeline: VigorAllEachContext["timeline"]) {
+        return <
+            I extends keyof VigorAllEachInterceptorsFunctions,
+            H extends keyof VigorAllEachProcessHandler,
+            K extends keyof VigorAllEachTimeline<I, H>
+        >(
+            action: K,
+            content: VigorAllEachTimeline<I, H>[K]
+        ) => {
+            timeline.push({
+                action: action,
+                content: content,
+                time: Date.now()
+            } as VigorAllEachTimelineItem<any, any>);
+        };
+    }
+    private _createEachInterceptorHandler(ctx: VigorAllEachContext, addEachTimeline: ReturnType<typeof this._createEachTimelineHandler>) {
+        return async<I extends keyof VigorAllEachInterceptorsFunctions>(
+            interceptorType: I,
+            api: (interceptorType: I, func: VigorAllEachInterceptorsFunctions[I]) => Pick<VigorAllEachInterceptorsApi<any>, VigorAllEachAllowedApis<I>>
+        ) => {
+            const interceptorsConfig = ctx["stats"]["interceptors"]
+            const interceptors = interceptorsConfig[interceptorType]
+            addEachTimeline("INTERCEPTOR_LOOP_STARTED", {
+                interceptorType: interceptorType,
+                interceptors,
+            })
+            const startTime = performance.now()
+            for(const func of interceptors) {
+                const scopedApi = api(interceptorType, func as VigorAllEachInterceptorsFunctions[I])
+                await func(ctx, scopedApi as VigorAllEachInterceptorsApi<any>)
+            }
+            const endTime = performance.now()
+            addEachTimeline("INTERCEPTOR_LOOP_ENDED", {
+                interceptorType: interceptorType,
+                interceptors,
+                took: endTime - startTime
+            })
+        };
+    }
+
+
     public target(...funcs: VigorIncludeSpread<VigorAllConfig["target"][number]>) { return this._next({target: funcs.flat()}) }
     public settings(func: ((s: VigorAllSettings) => VigorAllSettings) | VigorAllConfig["settings"]) {
         if(typeof func === 'function') {
@@ -1367,61 +2206,110 @@ class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
             stats,
             root,
             target: task,
-            semaphore
+            semaphore,
+            flag: {
+                overwritten: false
+            }
         }
-        const throwError = <E extends Error>(err: E) => {
-            ctx.timeline.push({action: "throwError called", content: err})
-            throw err
-        }
+        const addEachTimeline = this._createEachTimelineHandler(ctx.timeline)
+        const handleEachInterceptor = this._createEachInterceptorHandler(ctx, addEachTimeline)
+
+        addEachTimeline("PROCESS_HANDLING", {
+            type: "TASK_START",
+            data: {}
+        })
 
         try {
             try {
                 await semaphore.acquire();
-                ctx.timeline.push({action: "task acquired", content: ctx.target})
+                addEachTimeline("TASK_ACQUIRED", {
+                    target: ctx.target
+                })
 
-                ctx.timeline.push({action: "interceptor handling: before", content: stats.interceptors.before})
-                for(const func of stats.interceptors.before) {
-                    await func(ctx, {throwError})
-                }
+                await handleEachInterceptor("before", (interceptorType, func) => ({
+                    throwError: <E extends Error>(error: E) => {
+                        addEachTimeline("INTERCEPTOR_API_CALLED", {
+                            interceptorType,
+                            interceptor: func,
+                            method: "throwError",
+                            args: [error]
+                        })
+                        throw error
+                    }
+                }))
 
-                ctx.timeline.push({action: "task started", content: ctx.target})
-                ctx.result = await task(ctx)
+                addEachTimeline("TASK_STARTED", {
+                    target: ctx.target
+                })
+                const startTime = performance.now()
+                ctx.result = await ctx.target(ctx)
+                const endTime = performance.now()
+                addEachTimeline("TASK_ENDED", {
+                    target: ctx.target,
+                    took: endTime - startTime
+                })
+                await handleEachInterceptor("after", (interceptorType, func) => ({
+                    setResult: <R>(unknown: R): R => {
+                        addEachTimeline("INTERCEPTOR_API_CALLED", {
+                            interceptorType,
+                            interceptor: func,
+                            method: "setResult",
+                            args: [unknown]
+                        })
+                        ctx.result = unknown
+                        return unknown
+                    },
+                    throwError: <E extends Error>(error: E) => {
+                        addEachTimeline("INTERCEPTOR_API_CALLED", {
+                            interceptorType,
+                            interceptor: func,
+                            method: "throwError",
+                            args: [error]
+                        })
+                        throw error
+                    }
+                }))
             }
             finally {
-                ctx.timeline.push({action: "task ended", content: ctx.target})
-
-                const setResult = <R>(unk: R): R => {
-                    ctx.timeline.push({action: "setResult called", content: unk})
-                    ctx.result = unk
-                    return unk
-                }
-
-                ctx.timeline.push({action: "interceptor handling: after", content: stats.interceptors.after})
-                for(const func of stats.interceptors.after) {
-                    await func(ctx, {setResult, throwError})
-                }
-
                 semaphore.release()
-                ctx.timeline.push({action: "task released", content: ctx.target})
+                addEachTimeline("TASK_RELEASED", {
+                    target: ctx.target
+                })
                 return ctx.result
             }
         } catch(error) {
             ctx.error = error
 
-            let overwritten = false
-            const setResult = <R>(unk: R): R => {
-                ctx.timeline.push({action: "setResult called", content: unk})
-                ctx.result = unk
-                overwritten = true
-                return unk
-            }
+            addEachTimeline("PROCESS_HANDLING", {
+                type: "TASK_ERROR",
+                data: {
+                    error
+                }
+            })
 
-            ctx.timeline.push({action: "interceptor handling: onError", content: stats.interceptors.onError})
-            for(const func of stats.interceptors.onError) {
-                await func(ctx, {setResult, throwError})
-            }
-
-            if(overwritten) return ctx.result
+            await handleEachInterceptor("onError", (interceptorType, func) => ({
+                setResult: <R>(unknown: R): R => {
+                    addEachTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    })
+                    ctx.result = unknown
+                    ctx.flag.overwritten = true
+                    return unknown
+                },
+                throwError: <E extends Error>(error: E) => {
+                    addEachTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    })
+                    throw error
+                },
+            }))
+            if(ctx.flag.overwritten) return ctx.result
             throw error
         }
     }
@@ -1433,6 +2321,13 @@ class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
             stats,
             queue: new Set()
         }
+        const addTimeline = this._createTimelineHandler(ctx.timeline)
+        const handleInterceptor = this._createInterceptorHandler(ctx, addTimeline)
+
+        addTimeline("PROCESS_HANDLING", {
+            type: "REQUEST_START",
+            data: {}
+        })
 
         if(stats.target.length === 0) throw new VigorAllError("EMPTY_TARGET", {
             method: "request",
@@ -1452,7 +2347,7 @@ class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
                     if (next) next();
                 }
             }
-                acquire();
+            
             let promise: Promise<{success: boolean, value: unknown}>;
             promise = this.runTask(task, {stats, root: ctx}, {acquire, release}).then(res => {
                 ctx.queue.delete(promise)
@@ -1461,25 +2356,41 @@ class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
             ctx.queue.add(promise)
         }
 
+        addTimeline("QUEUE_REQUEST_STARTED", {
+            queue: ctx.queue
+        })
+        const startTime = performance.now()
         const raw = await Promise.all(ctx.queue)
+        const endTime = performance.now()
+        addTimeline("QUEUE_REQUEST_ENDED", {
+            queue: ctx.queue,
+            took: endTime - startTime
+        })
         ctx.result = stats.settings.onlySuccess
             ? raw.filter(r => r.success).map(r => r.value)
             : raw.map(r => r.value)
         
-        const setResult = <R extends Array<unknown>>(unk: R): R => {
-            ctx.timeline.push({action: "setResult called", content: unk})
-            ctx.result = unk
-            return unk
-        }
-        const throwError = <E extends Error>(err: E) => {
-            ctx.timeline.push({action: "throwError called", content: err})
-            throw err
-        }
-
-        ctx.timeline.push({action: "interceptor handling: result", content: stats.interceptors.result})
-        for(const func of stats.interceptors.result) {
-            await func(ctx, {setResult, throwError})
-        }
+        await handleInterceptor("result", (interceptorType, func) => ({
+            setResult: <R extends Array<unknown>>(unknown: R): R => {
+                addTimeline("INTERCEPTOR_API_CALLED", {
+                    interceptorType,
+                    interceptor: func,
+                    method: "setResult",
+                    args: [unknown]
+                })
+                ctx.result = unknown
+                return unknown
+            },
+            throwError: <E extends Error>(error: E) => {
+                addTimeline("INTERCEPTOR_API_CALLED", {
+                    interceptorType,
+                    interceptor: func,
+                    method: "throwError",
+                    args: [error]
+                })
+                throw error
+            },
+        }))
         return ctx.result as R
     }
 }

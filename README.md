@@ -1,6 +1,6 @@
 # vigor-fetch
 
-## Vigor is a composable, lightweighted (minified + gzipped ~5.5kb) network workflow toolkit built on top of native Fetch.
+## Vigor is a composable, lightweighted (minified + gzipped ~5.8kb) network workflow toolkit built on top of native Fetch.
 
 > Vigor provides a fluent, chainable API for building robust network logic with built-in retry, backoff, interceptors, parsing, and concurrency control.
 
@@ -57,6 +57,7 @@ const data = await vigor
 	.request();  
 // -> https://api.example.com/api/v1/main
 ```
+
 #### Advanced
 ```ts
 const data = await vigor
@@ -70,7 +71,7 @@ const data = await vigor
   )
   .interceptors(i => i
 	  .onError((ctx, api) => {
-	      api.retry();
+	      api.restart();
 	   })
   )
   .request();
@@ -702,6 +703,7 @@ const data = await vigor
 
 | Method | Description |
 |---|---|
+| method(http method) | Forces the http method |
 | origin(...paths) | Sets base URL and origin paths |
 | path(...paths) | Appends request paths |
 | query(params) | Sets query parameters |
@@ -934,7 +936,7 @@ Runs when fetch fails.
 |---|---|
 | setResult(value) | Returns fallback value |
 | throwError(error) | Throws error |
-| retry() | Re-executes fetch pipeline |
+| restart() | Re-executes fetch pipeline |
 
 ---
 
@@ -1061,25 +1063,6 @@ Runs before task execution starts.
 |---|---|
 | throwError(error) | Immediately throws error |
 | abort(error) | Aborts execution |
-
----
-
-### afterEach
-
-Runs after each task resolves.
-
-```ts
-.afterEach(async (ctx, api) => {
-  console.log(ctx.result);
-})
-```
-
-#### Available APIs
-
-| API | Description |
-|---|---|
-| setResult(value) | Replaces task result |
-| throwError(error) | Throws error |
 
 ---
 
