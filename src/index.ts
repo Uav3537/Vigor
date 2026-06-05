@@ -1303,7 +1303,7 @@ type VigorStringable = string | number | boolean | null | undefined | Date
 
 type VigorFetchConfig = {
     method?: "GET"|"POST"|"PUT"|"PATCH"|"DELETE"|"HEAD"|"OPTIONS"|"CONNECT"|"TRACE"
-    origin: Array<string>
+    origin: string
     path: Array<string>
     query: Array<Record<string, VigorStringable|Array<VigorStringable>>>
     hash: string
@@ -1426,7 +1426,7 @@ type VigorFetchTimeline<I extends keyof VigorFetchInterceptorsFunctions, H exten
 class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
     constructor(config?: Partial<VigorFetchConfig>) {
         const base = {
-            origin: [],
+            origin: VigorDefault as unknown as VigorFetchConfig["origin"],
             path: [],
             query: [],
             hash: "",
@@ -1490,7 +1490,7 @@ class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
         })
     }
     public method(str: VigorFetchConfig["method"]) { return this._next({ method: str }) }
-    public origin(...strs: VigorIncludeSpread<VigorStringable>) { return this._next({ origin: this._stringifyList(strs.flat()) }) }
+    public origin(str: VigorFetchConfig["origin"]) { return this._next({ origin: str }) }
     public path(...strs: VigorIncludeSpread<VigorStringable>) { return this._next({ path: this._stringifyList(strs.flat()) }) }
     public query(...strs: VigorIncludeSpread<VigorFetchConfig["query"][number]>) { return this._next({query: strs.flat()}) }
     public hash(str: VigorFetchConfig["hash"]) { return this._next({hash: str}) }
@@ -1499,7 +1499,7 @@ class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
     public body(obj: VigorFetchConfig["options"]["body"]) { return this._next({options: {headers: this._config.options.headers, body: obj}}) }
 
     protected _buildUrl(origin: VigorFetchConfig["origin"], path: VigorFetchConfig["path"], query: VigorFetchConfig["query"], hash: VigorFetchConfig["hash"]) {
-        const originObj = new URL(origin[0])
+        const originObj = new URL(origin)
         const baseStr = originObj.origin
         const pathObj = [originObj.pathname.replace(/^\/+|\/+$/g, '')]
         for(const str of path) {
@@ -2468,8 +2468,8 @@ const vigor = {
     ): Promise<R> => {
         return await func(VigorEntry, config);
     },
-    fetch: (...strs: Parameters<VigorFetch["origin"]>[0][]): VigorFetch => {
-        return new VigorFetch().origin(...strs)
+    fetch: (str: Parameters<VigorFetch["origin"]>[0]): VigorFetch => {
+        return new VigorFetch().origin(str)
     },
     retry: (target: Parameters<VigorRetry["target"]>[0]): VigorRetry => {
         return new VigorRetry().target(target)
