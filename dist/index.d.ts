@@ -120,6 +120,7 @@ type VigorRetryAlgorithmsConstantConfig = {
 declare class VigorRetryAlgorithmsConstant extends VigorStatus<VigorRetryAlgorithmsConstantConfig, VigorRetryAlgorithmsConstant> {
     constructor(config?: Partial<VigorRetryAlgorithmsConstantConfig>);
     interval(num: VigorRetryAlgorithmsConstantConfig["interval"]): VigorRetryAlgorithmsConstant;
+    _calculateDelay(attempt: number): number;
 }
 type VigorRetryAlgorithmsLinearConfig = {
     initial: number;
@@ -133,6 +134,7 @@ declare class VigorRetryAlgorithmsLinear extends VigorStatus<VigorRetryAlgorithm
     increment(num: VigorRetryAlgorithmsLinearConfig["increment"]): VigorRetryAlgorithmsLinear;
     minDelay(num: VigorRetryAlgorithmsLinearConfig["minDelay"]): VigorRetryAlgorithmsLinear;
     maxDelay(num: VigorRetryAlgorithmsLinearConfig["maxDelay"]): VigorRetryAlgorithmsLinear;
+    _calculateDelay(attempt: number): number;
 }
 type VigorRetryAlgorithmsBackoffConfig = {
     initial: number;
@@ -148,6 +150,7 @@ declare class VigorRetryAlgorithmsBackoff extends VigorStatus<VigorRetryAlgorith
     unit(num: VigorRetryAlgorithmsBackoffConfig["unit"]): VigorRetryAlgorithmsBackoff;
     minDelay(num: VigorRetryAlgorithmsBackoffConfig["minDelay"]): VigorRetryAlgorithmsBackoff;
     maxDelay(num: VigorRetryAlgorithmsBackoffConfig["maxDelay"]): VigorRetryAlgorithmsBackoff;
+    _calculateDelay(attempt: number): number;
 }
 type VigorRetryAlgorithmsCustomConfig = {
     func: VigorRetryAlgorithmsConfig;
@@ -157,6 +160,7 @@ type VigorRetryAlgorithmsCustomConfig = {
 declare class VigorRetryAlgorithmsCustom extends VigorStatus<VigorRetryAlgorithmsCustomConfig, VigorRetryAlgorithmsCustom> {
     constructor(config?: Partial<VigorRetryAlgorithmsCustomConfig>);
     func(num: VigorRetryAlgorithmsCustomConfig["func"]): VigorRetryAlgorithmsCustom;
+    _calculateDelay(attempt: number): number;
 }
 type VigorRetryAlgorithmsConfig = (attempt: number) => number;
 type VigorRetryInterceptorsApi<R> = {

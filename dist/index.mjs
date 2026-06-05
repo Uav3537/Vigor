@@ -126,7 +126,6 @@ class VigorRetryAlgorithmsConstant extends VigorStatus {
         super(config, base, (c) => new VigorRetryAlgorithmsConstant(c));
     }
     interval(num) { return this._next({ interval: num }); }
-    /** @internal */
     _calculateDelay(attempt) {
         return this._config.interval;
     }
@@ -145,7 +144,6 @@ class VigorRetryAlgorithmsLinear extends VigorStatus {
     increment(num) { return this._next({ increment: num }); }
     minDelay(num) { return this._next({ minDelay: num }); }
     maxDelay(num) { return this._next({ maxDelay: num }); }
-    /** @internal */
     _calculateDelay(attempt) {
         const { initial, increment, minDelay, maxDelay } = this._config;
         return Math.max(minDelay, Math.min(maxDelay, initial + increment * attempt));
@@ -167,7 +165,6 @@ class VigorRetryAlgorithmsBackoff extends VigorStatus {
     unit(num) { return this._next({ unit: num }); }
     minDelay(num) { return this._next({ minDelay: num }); }
     maxDelay(num) { return this._next({ maxDelay: num }); }
-    /** @internal */
     _calculateDelay(attempt) {
         const { initial, multiplier, unit, minDelay, maxDelay } = this._config;
         return Math.max(minDelay, Math.min(maxDelay, initial + unit * Math.pow(multiplier, attempt)));
@@ -183,7 +180,6 @@ class VigorRetryAlgorithmsCustom extends VigorStatus {
         super(config, base, (c) => new VigorRetryAlgorithmsCustom(c));
     }
     func(num) { return this._next({ func: num }); }
-    /** @internal */
     _calculateDelay(attempt) {
         const { func, minDelay, maxDelay } = this._config;
         return Math.max(minDelay, Math.min(maxDelay, func(attempt)));
