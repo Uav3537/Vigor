@@ -260,9 +260,14 @@ type VigorRetryTimeline<I extends keyof VigorRetryInterceptorsFunctions, H exten
 };
 declare class VigorRetry extends VigorStatus<VigorRetryConfig, VigorRetry> {
     constructor(config?: Partial<VigorRetryConfig>);
-    private RetryAlgorithms;
-    private _createTimelineHandler;
-    private _createInterceptorHandler;
+    protected readonly RetryAlgorithms: {
+        constant: (config?: Partial<VigorRetryAlgorithmsConstantConfig>) => VigorRetryAlgorithmsConstant;
+        linear: (config?: Partial<VigorRetryAlgorithmsLinearConfig>) => VigorRetryAlgorithmsLinear;
+        backoff: (config?: Partial<VigorRetryAlgorithmsBackoffConfig>) => VigorRetryAlgorithmsBackoff;
+        custom: (config?: Partial<VigorRetryAlgorithmsCustomConfig>) => VigorRetryAlgorithmsCustom;
+    };
+    protected _createTimelineHandler(timeline: VigorRetryContext["timeline"]): <I extends keyof VigorRetryInterceptorsFunctions, H extends keyof VigorRetryProcessHandler, K extends keyof VigorRetryTimeline<I, H>>(action: K, content: VigorRetryTimeline<I, H>[K]) => void;
+    protected _createInterceptorHandler(ctx: VigorRetryContext, addTimeline: ReturnType<typeof this._createTimelineHandler>): <I extends keyof VigorRetryInterceptorsFunctions>(interceptorType: I, api: (interceptorType: I, func: VigorRetryInterceptorsFunctions[I]) => Pick<VigorRetryInterceptorsApi<any>, VigorRetryAllowedApis<I>>) => Promise<void>;
     target(func: VigorRetryConfig["target"]): VigorRetry;
     settings(func: ((s: VigorRetrySettings) => VigorRetrySettings) | VigorRetrySettings | VigorRetrySettings["_config"]): VigorRetry;
     interceptors(func: ((i: VigorRetryInterceptors) => VigorRetryInterceptors) | VigorRetryInterceptors | VigorRetryInterceptors["_config"]): VigorRetry;
@@ -286,9 +291,19 @@ type VigorParseStrategiesConfig = {
 };
 declare class VigorParseStrategies extends VigorStatus<VigorParseStrategiesConfig, VigorParseStrategies> {
     constructor(config?: Partial<VigorParseStrategiesConfig>);
-    private ParseAutoHeaders;
-    private ParseAutoMethods;
-    private ParseAutoAlgorithms;
+    protected readonly ParseAutoHeaders: {
+        header: string;
+        regExp: RegExp;
+        method: (res: Response) => Promise<any>;
+    }[];
+    protected readonly ParseAutoMethods: {
+        title: string;
+        method: (res: Response) => Promise<any>;
+    }[];
+    protected readonly ParseAutoAlgorithms: {
+        contentType: (response: Response) => Promise<any>;
+        sniff: (response: Response) => Promise<any>;
+    };
     contentType(): VigorParseStrategies;
     sniff(): VigorParseStrategies;
     json(): VigorParseStrategies;
@@ -377,8 +392,8 @@ type VigorParseTimeline<I extends keyof VigorParseInterceptorsFunctions, H exten
 };
 declare class VigorParse extends VigorStatus<VigorParseConfig, VigorParse> {
     constructor(config?: Partial<VigorParseConfig>);
-    private _createTimelineHandler;
-    private _createInterceptorHandler;
+    protected _createTimelineHandler(timeline: VigorParseContext["timeline"]): <I extends keyof VigorParseInterceptorsFunctions, H extends keyof VigorParseProcessHandler, K extends keyof VigorParseTimeline<I, H>>(action: K, content: VigorParseTimeline<I, H>[K]) => void;
+    protected _createInterceptorHandler(ctx: VigorParseContext, addTimeline: ReturnType<typeof this._createTimelineHandler>): <I extends keyof VigorParseInterceptorsFunctions>(interceptorType: I, api: (interceptorType: I, func: VigorParseInterceptorsFunctions[I]) => Pick<VigorParseInterceptorsApi<any>, VigorParseAllowedApis<I>>) => Promise<void>;
     target(response: VigorParseConfig["target"]): VigorParse;
     settings(func: ((i: VigorParseSettings) => VigorParseSettings) | VigorParseSettings | VigorParseSettings["_config"]): VigorParse;
     strategies(func: ((i: VigorParseStrategies) => VigorParseStrategies) | VigorParseStrategies | VigorParseStrategies["_config"]): VigorParse;
@@ -521,9 +536,9 @@ type VigorFetchTimeline<I extends keyof VigorFetchInterceptorsFunctions, H exten
 };
 declare class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
     constructor(config?: Partial<VigorFetchConfig>);
-    private _createTimelineHandler;
-    private _createInterceptorHandler;
-    private _stringifyList;
+    protected _createTimelineHandler(timeline: VigorFetchContext["timeline"]): <I extends keyof VigorFetchInterceptorsFunctions, H extends keyof VigorFetchProcessHandler, K extends keyof VigorFetchTimeline<I, H>>(action: K, content: VigorFetchTimeline<I, H>[K]) => void;
+    protected _createInterceptorHandler(ctx: VigorFetchContext, addTimeline: ReturnType<typeof this._createTimelineHandler>): <I extends keyof VigorFetchInterceptorsFunctions>(interceptorType: I, api: (interceptorType: I, func: VigorFetchInterceptorsFunctions[I]) => Pick<VigorFetchInterceptorsApi<any>, VigorFetchAllowedApis<I>>) => Promise<void>;
+    protected _stringifyList(unkList: Array<VigorStringable>): Array<string>;
     method(str: VigorFetchConfig["method"]): VigorFetch;
     origin(...strs: VigorIncludeSpread<VigorStringable>): VigorFetch;
     path(...strs: VigorIncludeSpread<VigorStringable>): VigorFetch;
@@ -532,8 +547,12 @@ declare class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
     options(obj: VigorFetchConfig["options"]): VigorFetch;
     headers(obj: VigorFetchConfig["options"]["headers"]): VigorFetch;
     body(obj: VigorFetchConfig["options"]["body"]): VigorFetch;
-    private _buildUrl;
-    private _normalizeOptions;
+    protected _buildUrl(origin: VigorFetchConfig["origin"], path: VigorFetchConfig["path"], query: VigorFetchConfig["query"], hash: VigorFetchConfig["hash"]): string;
+    protected _normalizeOptions(body: unknown): {
+        isJson: boolean;
+        headers: Record<string, unknown>;
+        body: BodyInit | null | undefined;
+    };
     settings(func: ((s: VigorFetchSettings) => VigorFetchSettings) | VigorFetchSettings | VigorFetchSettings["_config"]): VigorFetch;
     interceptors(func: ((s: VigorFetchInterceptors) => VigorFetchInterceptors) | VigorFetchInterceptors | VigorFetchInterceptors["_config"]): VigorFetch;
     retryConfig(func: ((s: VigorRetry) => VigorRetry) | VigorRetry | VigorRetry["_config"]): VigorFetch;
@@ -706,14 +725,20 @@ type VigorAllEachTimeline<I extends keyof VigorAllEachInterceptorsFunctions, H e
 };
 declare class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
     constructor(config?: Partial<VigorAllConfig>);
-    private _createTimelineHandler;
-    private _createInterceptorHandler;
-    private _createEachTimelineHandler;
-    private _createEachInterceptorHandler;
+    protected _createTimelineHandler(timeline: VigorAllContext["timeline"]): <I extends keyof VigorAllInterceptorsFunctions, H extends keyof VigorAllProcessHandler, K extends keyof VigorAllTimeline<I, H>>(action: K, content: VigorAllTimeline<I, H>[K]) => void;
+    protected _createInterceptorHandler(ctx: VigorAllContext, addTimeline: ReturnType<typeof this._createTimelineHandler>): <I extends keyof VigorAllInterceptorsFunctions>(interceptorType: I, api: (interceptorType: I, func: VigorAllInterceptorsFunctions[I]) => Pick<VigorAllInterceptorsApi<any>, VigorAllAllowedApis<I>>) => Promise<void>;
+    protected _createEachTimelineHandler(timeline: VigorAllEachContext["timeline"]): <I extends keyof VigorAllEachInterceptorsFunctions, H extends keyof VigorAllEachProcessHandler, K extends keyof VigorAllEachTimeline<I, H>>(action: K, content: VigorAllEachTimeline<I, H>[K]) => void;
+    protected _createEachInterceptorHandler(ctx: VigorAllEachContext, addEachTimeline: ReturnType<typeof this._createEachTimelineHandler>): <I extends keyof VigorAllEachInterceptorsFunctions>(interceptorType: I, api: (interceptorType: I, func: VigorAllEachInterceptorsFunctions[I]) => Pick<VigorAllEachInterceptorsApi<any>, VigorAllEachAllowedApis<I>>) => Promise<void>;
     target(...funcs: VigorIncludeSpread<VigorAllConfig["target"][number]>): VigorAll;
     settings(func: ((s: VigorAllSettings) => VigorAllSettings) | VigorAllSettings | VigorAllSettings["_config"]): VigorAll;
     interceptors(func: ((s: VigorAllInterceptors) => VigorAllInterceptors) | VigorAllInterceptors | VigorAllInterceptors["_config"]): VigorAll;
-    private runTask;
+    protected runTask(task: VigorAllEachContext["target"], { stats, root }: {
+        stats: VigorAllEachContext["stats"];
+        root: VigorAllEachContext["root"];
+    }, semaphore: {
+        acquire: VigorAllEachContext["semaphore"]["acquire"];
+        release: VigorAllEachContext["semaphore"]["release"];
+    }): Promise<unknown>;
     request<R extends VigorAllContext["result"]>(config?: VigorAllConfig, timeline?: VigorAllContext["timeline"]): Promise<R>;
 }
 declare const VigorEntry: {
