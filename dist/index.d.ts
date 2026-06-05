@@ -264,8 +264,8 @@ declare class VigorRetry extends VigorStatus<VigorRetryConfig, VigorRetry> {
     private _createTimelineHandler;
     private _createInterceptorHandler;
     target(func: VigorRetryConfig["target"]): VigorRetry;
-    settings(func: ((s: VigorRetrySettings) => VigorRetrySettings) | VigorRetryConfig["settings"]): VigorRetry;
-    interceptors(func: ((i: VigorRetryInterceptors) => VigorRetryInterceptors) | VigorRetryConfig["interceptors"]): VigorRetry;
+    settings(func: ((s: VigorRetrySettings) => VigorRetrySettings) | VigorRetrySettings | VigorRetrySettings["_config"]): VigorRetry;
+    interceptors(func: ((i: VigorRetryInterceptors) => VigorRetryInterceptors) | VigorRetryInterceptors | VigorRetryInterceptors["_config"]): VigorRetry;
     algorithms(func: (a: typeof this.RetryAlgorithms) => {
         _calculateDelay: VigorRetryConfig["algorithm"];
     }): VigorRetry;
@@ -355,7 +355,7 @@ type VigorParseProcessHandler = {
 type VigorParseTimeline<I extends keyof VigorParseInterceptorsFunctions, H extends keyof VigorParseProcessHandler> = {
     PROCESS_HANDLING: {
         type: H;
-        data: VigorRetryProcessHandler[H];
+        data: VigorParseProcessHandler[H];
     };
     INTERCEPTOR_LOOP_STARTED: {
         interceptorType: I;
@@ -380,9 +380,9 @@ declare class VigorParse extends VigorStatus<VigorParseConfig, VigorParse> {
     private _createTimelineHandler;
     private _createInterceptorHandler;
     target(response: VigorParseConfig["target"]): VigorParse;
-    settings(func: ((i: VigorParseSettings) => VigorParseSettings) | VigorParseConfig["settings"]): VigorParse;
-    strategies(func: ((i: VigorParseStrategies) => VigorParseStrategies) | VigorParseConfig["strategies"]): VigorParse;
-    interceptors(func: ((i: VigorParseInterceptors) => VigorParseInterceptors) | VigorParseConfig["interceptors"]): VigorParse;
+    settings(func: ((i: VigorParseSettings) => VigorParseSettings) | VigorParseSettings | VigorParseSettings["_config"]): VigorParse;
+    strategies(func: ((i: VigorParseStrategies) => VigorParseStrategies) | VigorParseStrategies | VigorParseStrategies["_config"]): VigorParse;
+    interceptors(func: ((i: VigorParseInterceptors) => VigorParseInterceptors) | VigorParseInterceptors | VigorParseInterceptors["_config"]): VigorParse;
     request<R>(config?: VigorParseConfig, timeline?: VigorParseContext["timeline"]): Promise<R>;
 }
 type VigorFetchSettingsConfig = {
@@ -534,10 +534,10 @@ declare class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
     body(obj: VigorFetchConfig["options"]["body"]): VigorFetch;
     private _buildUrl;
     private _normalizeOptions;
-    settings(func: ((s: VigorFetchSettings) => VigorFetchSettings) | VigorFetchConfig["settings"]): VigorFetch;
-    interceptors(func: ((s: VigorFetchInterceptors) => VigorFetchInterceptors) | VigorFetchConfig["interceptors"]): VigorFetch;
-    retryConfig(func: ((s: VigorRetry) => VigorRetry) | VigorFetchConfig["retryConfig"]): VigorFetch;
-    parseConfig(func: ((s: VigorParse) => VigorParse) | VigorFetchConfig["parseConfig"]): VigorFetch;
+    settings(func: ((s: VigorFetchSettings) => VigorFetchSettings) | VigorFetchSettings | VigorFetchSettings["_config"]): VigorFetch;
+    interceptors(func: ((s: VigorFetchInterceptors) => VigorFetchInterceptors) | VigorFetchInterceptors | VigorFetchInterceptors["_config"]): VigorFetch;
+    retryConfig(func: ((s: VigorRetry) => VigorRetry) | VigorRetry | VigorRetry["_config"]): VigorFetch;
+    parseConfig(func: ((s: VigorParse) => VigorParse) | VigorParse | VigorParse["_config"]): VigorFetch;
     request<R>(config?: VigorFetchConfig, timeline?: VigorFetchContext["timeline"]): Promise<R>;
 }
 type VigorAllSettingsConfig = {
@@ -711,8 +711,8 @@ declare class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
     private _createEachTimelineHandler;
     private _createEachInterceptorHandler;
     target(...funcs: VigorIncludeSpread<VigorAllConfig["target"][number]>): VigorAll;
-    settings(func: ((s: VigorAllSettings) => VigorAllSettings) | VigorAllConfig["settings"]): VigorAll;
-    interceptors(func: ((s: VigorAllInterceptors) => VigorAllInterceptors) | VigorAllConfig["interceptors"]): VigorAll;
+    settings(func: ((s: VigorAllSettings) => VigorAllSettings) | VigorAllSettings | VigorAllSettings["_config"]): VigorAll;
+    interceptors(func: ((s: VigorAllInterceptors) => VigorAllInterceptors) | VigorAllInterceptors | VigorAllInterceptors["_config"]): VigorAll;
     private runTask;
     request<R extends VigorAllContext["result"]>(config?: VigorAllConfig, timeline?: VigorAllContext["timeline"]): Promise<R>;
 }

@@ -4,7 +4,7 @@ Object.defineProperty(exports, '__esModule', { value: true });
 
 const VigorErrorMessageFuncs = {
     INVALID_TARGET: ({ expected, received }) => `Invalid Task: ${typeof received} (expected: ${expected.join(', ')})`,
-    EXHAUSTED: ({ maxAttempts }) => `Retry exhausted: max ${maxAttempts})`,
+    EXHAUSTED: ({ maxAttempts }) => `Retry exhausted, (max ${maxAttempts})`,
     TIMED_OUT: ({ limit, attempt }) => `Timeout: exceeded ${limit}ms (attempt: ${attempt})`,
     INVALID_CONTENT_TYPE: ({ expected, received, response }) => `Invalid Content Type Header: ${typeof received} (expected: ${expected.join(', ')})`,
     PARSER_NOT_FOUND: ({ expected, received, response }) => `Parser Not Found For Header: ${typeof received} (expected: ${expected.join(', ')})`,
@@ -242,12 +242,18 @@ class VigorRetry extends VigorStatus {
     }
     target(func) { return this._next({ target: func }); }
     settings(func) {
+        if (func instanceof VigorRetrySettings) {
+            return this._next({ settings: func._getConfig() });
+        }
         if (typeof func === 'function') {
             return this._next({ settings: func(new VigorRetrySettings(this._config.settings))._getConfig() });
         }
         return this._next({ settings: func });
     }
     interceptors(func) {
+        if (func instanceof VigorRetryInterceptors) {
+            return this._next({ interceptors: func._getConfig() });
+        }
         if (typeof func === 'function') {
             return this._next({ interceptors: func(new VigorRetryInterceptors(this._config.interceptors))._getConfig() });
         }
@@ -708,18 +714,27 @@ class VigorParse extends VigorStatus {
     }
     target(response) { return this._next({ target: response }); }
     settings(func) {
+        if (func instanceof VigorParseSettings) {
+            return this._next({ settings: func._getConfig() });
+        }
         if (typeof func === 'function') {
             return this._next({ settings: func(new VigorParseSettings(this._config.settings))._getConfig() });
         }
         return this._next({ settings: func });
     }
     strategies(func) {
+        if (func instanceof VigorParseStrategies) {
+            return this._next({ strategies: func._getConfig() });
+        }
         if (typeof func === 'function') {
             return this._next({ strategies: func(new VigorParseStrategies(this._config.strategies))._getConfig() });
         }
         return this._next({ strategies: func });
     }
     interceptors(func) {
+        if (func instanceof VigorParseInterceptors) {
+            return this._next({ interceptors: func._getConfig() });
+        }
         if (typeof func === 'function') {
             return this._next({ interceptors: func(new VigorParseInterceptors(this._config.interceptors))._getConfig() });
         }
@@ -1032,24 +1047,36 @@ class VigorFetch extends VigorStatus {
         });
     }
     settings(func) {
+        if (func instanceof VigorFetchSettings) {
+            return this._next({ settings: func._getConfig() });
+        }
         if (typeof func === 'function') {
             return this._next({ settings: func(new VigorFetchSettings(this._config.settings))._getConfig() });
         }
         return this._next({ settings: func });
     }
     interceptors(func) {
+        if (func instanceof VigorFetchInterceptors) {
+            return this._next({ interceptors: func._getConfig() });
+        }
         if (typeof func === 'function') {
             return this._next({ interceptors: func(new VigorFetchInterceptors(this._config.interceptors))._getConfig() });
         }
         return this._next({ interceptors: func });
     }
     retryConfig(func) {
+        if (func instanceof VigorRetry) {
+            return this._next({ retryConfig: func._getConfig() });
+        }
         if (typeof func === 'function') {
             return this._next({ retryConfig: func(new VigorRetry(this._config.retryConfig))._getConfig() });
         }
         return this._next({ retryConfig: func });
     }
     parseConfig(func) {
+        if (func instanceof VigorParse) {
+            return this._next({ parseConfig: func._getConfig() });
+        }
         if (typeof func === 'function') {
             return this._next({ parseConfig: func(new VigorParse(this._config.parseConfig))._getConfig() });
         }
@@ -1439,12 +1466,18 @@ class VigorAll extends VigorStatus {
     }
     target(...funcs) { return this._next({ target: funcs.flat() }); }
     settings(func) {
+        if (func instanceof VigorAllSettings) {
+            return this._next({ settings: func._getConfig() });
+        }
         if (typeof func === 'function') {
             return this._next({ settings: func(new VigorAllSettings(this._config.settings))._getConfig() });
         }
         return this._next({ settings: func });
     }
     interceptors(func) {
+        if (func instanceof VigorAllInterceptors) {
+            return this._next({ interceptors: func._getConfig() });
+        }
         if (typeof func === 'function') {
             return this._next({ interceptors: func(new VigorAllInterceptors(this._config.interceptors))._getConfig() });
         }
@@ -1599,10 +1632,10 @@ class VigorAll extends VigorStatus {
         };
         for (const task of stats.target) {
             let promise;
-            promise = this.runTask(task, { stats, root: ctx }, { acquire, release }).then(res => {
-                ctx.queue.delete(promise);
-                return { success: true, value: res };
-            }).catch(err => ({ success: false, value: err }));
+            promise = this.runTask(task, { stats, root: ctx }, { acquire, release })
+                .then(res => ({ success: true, value: res }))
+                .catch(err => ({ success: false, value: err }))
+                .finally(() => ctx.queue.delete(promise));
             ctx.queue.add(promise);
         }
         addTimeline("QUEUE_REQUEST_STARTED", {
