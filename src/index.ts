@@ -1,6 +1,6 @@
 const VigorErrorMessageFuncs = {
     INVALID_TARGET: ({expected, received}: {expected: Array<string>, received: unknown}) => `Invalid Task: ${typeof received} (expected: ${expected.join(', ')})`,
-    EXHAUSTED: ({ maxAttempts }: { maxAttempts: number }) => `Retry exhausted: max ${maxAttempts})`,
+    EXHAUSTED: ({ maxAttempts }: { maxAttempts: number }) => `Retry exhausted, (max ${maxAttempts})`,
     TIMED_OUT: ({ limit, attempt }: {limit: number, attempt: number}) => `Timeout: exceeded ${limit}ms (attempt: ${attempt})`,
     INVALID_CONTENT_TYPE: ({expected, received, response}: {expected: Array<string>, received: unknown, response: Response}) => `Invalid Content Type Header: ${typeof received} (expected: ${expected.join(', ')})`,
     PARSER_NOT_FOUND: ({expected, received, response}: {expected: Array<string>, received: unknown, response: Response}) => `Parser Not Found For Header: ${typeof received} (expected: ${expected.join(', ')})`,
@@ -459,13 +459,19 @@ class VigorRetry extends VigorStatus<VigorRetryConfig, VigorRetry> {
     }
     
     public target(func: VigorRetryConfig["target"]) { return this._next({target: func}) }
-    public settings(func: ((s: VigorRetrySettings) => VigorRetrySettings) | VigorRetryConfig["settings"]) {
+    public settings(func: ((s: VigorRetrySettings) => VigorRetrySettings) | VigorRetrySettings | VigorRetrySettings["_config"]) {
+        if(func instanceof VigorRetrySettings) {
+            return this._next({settings: func._getConfig()})
+        }
         if(typeof func === 'function') {
             return this._next({settings: func(new VigorRetrySettings(this._config.settings))._getConfig()})
         }
         return this._next({settings: func})
     }
-    public interceptors(func: ((i: VigorRetryInterceptors) => VigorRetryInterceptors) | VigorRetryConfig["interceptors"]) {
+    public interceptors(func: ((i: VigorRetryInterceptors) => VigorRetryInterceptors) | VigorRetryInterceptors | VigorRetryInterceptors["_config"]) {
+        if(func instanceof VigorRetryInterceptors) {
+            return this._next({interceptors: func._getConfig()})
+        }
         if(typeof func === 'function') {
             return this._next({interceptors: func(new VigorRetryInterceptors(this._config.interceptors))._getConfig()})
         }
@@ -987,7 +993,7 @@ type VigorParseProcessHandler = {
 type VigorParseTimeline<I extends keyof VigorParseInterceptorsFunctions, H extends keyof VigorParseProcessHandler> = {
     PROCESS_HANDLING: {
         type: H,
-        data: VigorRetryProcessHandler[H]
+        data: VigorParseProcessHandler[H]
     }
     INTERCEPTOR_LOOP_STARTED: {
         interceptorType: I
@@ -1048,7 +1054,7 @@ class VigorParse extends VigorStatus<VigorParseConfig, VigorParse> {
             const startTime = performance.now()
             for(const func of interceptors) {
                 const scopedApi = api(interceptorType, func as VigorParseInterceptorsFunctions[I])
-                await func(ctx, scopedApi as VigorRetryInterceptorsApi<any>)
+                await func(ctx, scopedApi as VigorParseInterceptorsApi<any>)
             }
             const endTime = performance.now()
             addTimeline("INTERCEPTOR_LOOP_ENDED", {
@@ -1060,19 +1066,28 @@ class VigorParse extends VigorStatus<VigorParseConfig, VigorParse> {
     }
 
     public target(response: VigorParseConfig["target"]) { return this._next({target: response}) }
-    public settings(func: ((i: VigorParseSettings) => VigorParseSettings) | VigorParseConfig["settings"]) {
+    public settings(func: ((i: VigorParseSettings) => VigorParseSettings) | VigorParseSettings | VigorParseSettings["_config"]) {
+        if(func instanceof VigorParseSettings) {
+            return this._next({settings: func._getConfig()})
+        }
         if(typeof func === 'function') {
             return this._next({settings: func(new VigorParseSettings(this._config.settings))._getConfig()})
         }
         return this._next({settings: func})
     }
-    public strategies(func: ((i: VigorParseStrategies) => VigorParseStrategies) | VigorParseConfig["strategies"]) {
+    public strategies(func: ((i: VigorParseStrategies) => VigorParseStrategies) | VigorParseStrategies | VigorParseStrategies["_config"]) {
+        if(func instanceof VigorParseStrategies) {
+            return this._next({strategies: func._getConfig()})
+        }
         if(typeof func === 'function') {
             return this._next({strategies: func(new VigorParseStrategies(this._config.strategies))._getConfig()})
         }
         return this._next({strategies: func})
     }
-    public interceptors(func: ((i: VigorParseInterceptors) => VigorParseInterceptors) | VigorParseConfig["interceptors"]) {
+    public interceptors(func: ((i: VigorParseInterceptors) => VigorParseInterceptors) | VigorParseInterceptors | VigorParseInterceptors["_config"]) {
+        if(func instanceof VigorParseInterceptors) {
+            return this._next({interceptors: func._getConfig()})
+        }
         if(typeof func === 'function') {
             return this._next({interceptors: func(new VigorParseInterceptors(this._config.interceptors))._getConfig()})
         }
@@ -1449,7 +1464,7 @@ class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
     private _createInterceptorHandler(ctx: VigorFetchContext, addTimeline: ReturnType<typeof this._createTimelineHandler>) {
         return async<I extends keyof VigorFetchInterceptorsFunctions>(
             interceptorType: I,
-            api: (interceptorType: I, func: VigorFetchInterceptorsFunctions[I]) => Pick<VigorFetchInterceptorsApi<any>, VigorParseAllowedApis<I>>
+            api: (interceptorType: I, func: VigorFetchInterceptorsFunctions[I]) => Pick<VigorFetchInterceptorsApi<any>, VigorFetchAllowedApis<I>>
         ) => {
             const interceptorsConfig = ctx["stats"]["interceptors"]
             const interceptors = interceptorsConfig[interceptorType]
@@ -1549,25 +1564,37 @@ class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
         })
     }
 
-    public settings(func: ((s: VigorFetchSettings) => VigorFetchSettings) | VigorFetchConfig["settings"]) {
+    public settings(func: ((s: VigorFetchSettings) => VigorFetchSettings) | VigorFetchSettings | VigorFetchSettings["_config"]) {
+        if(func instanceof VigorFetchSettings) {
+            return this._next({settings: func._getConfig()})
+        }
         if(typeof func === 'function') {
             return this._next({settings: func(new VigorFetchSettings(this._config.settings))._getConfig()})
         }
         return this._next({settings: func})
     }
-    public interceptors(func: ((s: VigorFetchInterceptors) => VigorFetchInterceptors) | VigorFetchConfig["interceptors"]) {
+    public interceptors(func: ((s: VigorFetchInterceptors) => VigorFetchInterceptors) | VigorFetchInterceptors | VigorFetchInterceptors["_config"]) {
+        if(func instanceof VigorFetchInterceptors) {
+            return this._next({interceptors: func._getConfig()})
+        }
         if(typeof func === 'function') {
             return this._next({interceptors: func(new VigorFetchInterceptors(this._config.interceptors))._getConfig()})
         }
         return this._next({interceptors: func})
     }
-    public retryConfig(func: ((s: VigorRetry) => VigorRetry) | VigorFetchConfig["retryConfig"]) {
+    public retryConfig(func: ((s: VigorRetry) => VigorRetry) | VigorRetry | VigorRetry["_config"]) {
+        if(func instanceof VigorRetry) {
+            return this._next({retryConfig: func._getConfig()})
+        }
         if(typeof func === 'function') {
             return this._next({retryConfig: func(new VigorRetry(this._config.retryConfig))._getConfig()})
         }
         return this._next({retryConfig: func})
     }
-    public parseConfig(func: ((s: VigorParse) => VigorParse) | VigorFetchConfig["parseConfig"]) {
+    public parseConfig(func: ((s: VigorParse) => VigorParse) | VigorParse | VigorParse["_config"]) {
+        if(func instanceof VigorParse) {
+            return this._next({parseConfig: func._getConfig()})
+        }
         if(typeof func === 'function') {
             return this._next({parseConfig: func(new VigorParse(this._config.parseConfig))._getConfig()})
         }
@@ -2182,13 +2209,19 @@ class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
 
 
     public target(...funcs: VigorIncludeSpread<VigorAllConfig["target"][number]>) { return this._next({target: funcs.flat()}) }
-    public settings(func: ((s: VigorAllSettings) => VigorAllSettings) | VigorAllConfig["settings"]) {
+    public settings(func: ((s: VigorAllSettings) => VigorAllSettings) | VigorAllSettings | VigorAllSettings["_config"]) {
+        if(func instanceof VigorAllSettings) {
+            return this._next({settings: func._getConfig()})
+        }
         if(typeof func === 'function') {
             return this._next({settings: func(new VigorAllSettings(this._config.settings))._getConfig()})
         }
         return this._next({settings: func})
     }
-    public interceptors(func: ((s: VigorAllInterceptors) => VigorAllInterceptors) | VigorAllConfig["interceptors"]) {
+    public interceptors(func: ((s: VigorAllInterceptors) => VigorAllInterceptors) | VigorAllInterceptors | VigorAllInterceptors["_config"]) {
+        if(func instanceof VigorAllInterceptors) {
+            return this._next({interceptors: func._getConfig()})
+        }
         if(typeof func === 'function') {
             return this._next({interceptors: func(new VigorAllInterceptors(this._config.interceptors))._getConfig()})
         }
@@ -2352,10 +2385,10 @@ class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
         }
         for(const task of stats.target) {
             let promise: Promise<{success: boolean, value: unknown}>;
-            promise = this.runTask(task, {stats, root: ctx}, {acquire, release}).then(res => {
-                ctx.queue.delete(promise)
-                return {success: true, value: res}
-            }).catch(err => ({success: false, value: err}))
+            promise = this.runTask(task, {stats, root: ctx}, {acquire, release})
+                .then(res => ({success: true, value: res}))
+                .catch(err => ({success: false, value: err}))
+                .finally(() => ctx.queue.delete(promise))
             ctx.queue.add(promise)
         }
 
@@ -2470,7 +2503,6 @@ const vigor = {
         }
     }
 }
-
 
 export default vigor
 export { vigor, VigorEntry }
