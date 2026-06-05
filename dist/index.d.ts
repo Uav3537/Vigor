@@ -435,7 +435,7 @@ type VigorFetchOptions<T = Record<string, any>> = {
 type VigorStringable = string | number | boolean | null | undefined | Date;
 type VigorFetchConfig = {
     method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" | "CONNECT" | "TRACE";
-    origin: Array<string>;
+    origin: string;
     path: Array<string>;
     query: Array<Record<string, VigorStringable | Array<VigorStringable>>>;
     hash: string;
@@ -544,7 +544,7 @@ declare class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
     protected _createInterceptorHandler(ctx: VigorFetchContext, addTimeline: ReturnType<typeof this._createTimelineHandler>): <I extends keyof VigorFetchInterceptorsFunctions>(interceptorType: I, api: (interceptorType: I, func: VigorFetchInterceptorsFunctions[I]) => Pick<VigorFetchInterceptorsApi<any>, VigorFetchAllowedApis<I>>) => Promise<void>;
     protected _stringifyList(unkList: Array<VigorStringable>): Array<string>;
     method(str: VigorFetchConfig["method"]): VigorFetch;
-    origin(...strs: VigorIncludeSpread<VigorStringable>): VigorFetch;
+    origin(str: VigorFetchConfig["origin"]): VigorFetch;
     path(...strs: VigorIncludeSpread<VigorStringable>): VigorFetch;
     query(...strs: VigorIncludeSpread<VigorFetchConfig["query"][number]>): VigorFetch;
     hash(str: VigorFetchConfig["hash"]): VigorFetch;
@@ -780,7 +780,7 @@ declare const VigorEntry: {
 };
 declare const vigor: {
     use: <C, R>(func: (entry: typeof VigorEntry, config: C) => R | Promise<R>, config: C) => Promise<R>;
-    fetch: (...strs: Parameters<VigorFetch["origin"]>[0][]) => VigorFetch;
+    fetch: (str: Parameters<VigorFetch["origin"]>[0]) => VigorFetch;
     retry: (target: Parameters<VigorRetry["target"]>[0]) => VigorRetry;
     parse: (response: Parameters<VigorParse["target"]>[0]) => VigorParse;
     all: (...funcs: Parameters<VigorAll["target"]>[0][]) => VigorAll;

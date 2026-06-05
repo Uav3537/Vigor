@@ -913,7 +913,7 @@ class VigorFetchInterceptors extends VigorStatus {
 class VigorFetch extends VigorStatus {
     constructor(config) {
         const base = {
-            origin: [],
+            origin: VigorDefault,
             path: [],
             query: [],
             hash: "",
@@ -968,7 +968,7 @@ class VigorFetch extends VigorStatus {
         });
     }
     method(str) { return this._next({ method: str }); }
-    origin(...strs) { return this._next({ origin: this._stringifyList(strs.flat()) }); }
+    origin(str) { return this._next({ origin: str }); }
     path(...strs) { return this._next({ path: this._stringifyList(strs.flat()) }); }
     query(...strs) { return this._next({ query: strs.flat() }); }
     hash(str) { return this._next({ hash: str }); }
@@ -976,7 +976,7 @@ class VigorFetch extends VigorStatus {
     headers(obj) { return this._next({ options: { headers: obj } }); }
     body(obj) { return this._next({ options: { headers: this._config.options.headers, body: obj } }); }
     _buildUrl(origin, path, query, hash) {
-        const originObj = new URL(origin[0]);
+        const originObj = new URL(origin);
         const baseStr = originObj.origin;
         const pathObj = [originObj.pathname.replace(/^\/+|\/+$/g, '')];
         for (const str of path) {
@@ -1704,8 +1704,8 @@ const vigor = {
     use: async (func, config) => {
         return await func(VigorEntry, config);
     },
-    fetch: (...strs) => {
-        return new VigorFetch().origin(...strs);
+    fetch: (str) => {
+        return new VigorFetch().origin(str);
     },
     retry: (target) => {
         return new VigorRetry().target(target);
