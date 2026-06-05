@@ -190,7 +190,6 @@ class VigorRetryAlgorithmsConstant extends VigorStatus<VigorRetryAlgorithmsConst
     }
 
     public interval(num: VigorRetryAlgorithmsConstantConfig["interval"]) { return this._next({interval: num}) }
-    /** @internal */
     public _calculateDelay(attempt: number) {
         return this._config.interval
     }
@@ -218,7 +217,6 @@ class VigorRetryAlgorithmsLinear extends VigorStatus<VigorRetryAlgorithmsLinearC
     public increment(num: VigorRetryAlgorithmsLinearConfig["increment"]) { return this._next({increment: num}) }
     public minDelay(num: VigorRetryAlgorithmsLinearConfig["minDelay"]) { return this._next({minDelay: num}) }
     public maxDelay(num: VigorRetryAlgorithmsLinearConfig["maxDelay"]) { return this._next({maxDelay: num}) }
-    /** @internal */
     public _calculateDelay(attempt: number) {
         const {initial, increment, minDelay, maxDelay} = this._config
         return Math.max(minDelay, Math.min(maxDelay, initial + increment * attempt))
@@ -250,7 +248,6 @@ class VigorRetryAlgorithmsBackoff extends VigorStatus<VigorRetryAlgorithmsBackof
     public unit(num: VigorRetryAlgorithmsBackoffConfig["unit"]) { return this._next({unit: num}) }
     public minDelay(num: VigorRetryAlgorithmsBackoffConfig["minDelay"]) { return this._next({minDelay: num}) }
     public maxDelay(num: VigorRetryAlgorithmsBackoffConfig["maxDelay"]) { return this._next({maxDelay: num}) }
-    /** @internal */
     public _calculateDelay(attempt: number) {
         const {initial, multiplier, unit, minDelay, maxDelay} = this._config
         return Math.max(minDelay, Math.min(maxDelay, initial + unit * Math.pow(multiplier, attempt)))
@@ -274,7 +271,6 @@ class VigorRetryAlgorithmsCustom extends VigorStatus<VigorRetryAlgorithmsCustomC
     }
 
     public func(num: VigorRetryAlgorithmsCustomConfig["func"]) { return this._next({func: num}) }
-    /** @internal */
     public _calculateDelay(attempt: number) {
         const {func, minDelay, maxDelay} = this._config
         return Math.max(minDelay, Math.min(maxDelay, func(attempt)))
