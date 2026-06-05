@@ -93,7 +93,7 @@ abstract class VigorStatus<C, Self> {
     ) {
         this._config = { ...this._base, ...(config || {}) };
     }
-    protected _mergeConfig<C>(source: any, target: C | Partial<C> | undefined): C {
+    protected _mergeConfig(source: any, target: C | Partial<C> | undefined): C {
         const isPlainObject = (val: any): boolean => 
             val !== null && typeof val === 'object' && Object.getPrototypeOf(val) === Object.prototype;
 
@@ -122,7 +122,6 @@ const VigorDefault = Symbol("DEFAULT") as symbol & {
 }
 
 type VigorIncludeSpread<T> = Array<T|Array<T>>
-
 
 type VigorRetrySettingsConfig = {
     default: unknown
@@ -1956,6 +1955,7 @@ type VigorAllContext = {
     timeline: Array<VigorAllTimelineItem<any, any>>
     stats: VigorAllConfig
     queue: Set<Promise<{success: boolean, value: unknown}>>
+    active: number
 }
 
 type VigorAllEachContext = {
@@ -2275,7 +2275,7 @@ class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
                 addEachTimeline("TASK_RELEASED", {
                     target: ctx.target
                 })
-                return ctx.result
+                
             }
         } catch(error) {
             ctx.error = error
@@ -2312,6 +2312,7 @@ class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
             if(ctx.flag.overwritten) return ctx.result
             throw error
         }
+        return ctx.result
     }
     public async request<R extends VigorAllContext["result"]>(config?: VigorAllConfig, timeline: VigorAllContext["timeline"] = []) {
         const stats = this._mergeConfig(this._config, config)
@@ -2319,7 +2320,8 @@ class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
             result: VigorDefault as unknown as VigorAllContext["result"],
             timeline,
             stats,
-            queue: new Set()
+            queue: new Set(),
+            active: 0
         }
         const addTimeline = this._createTimelineHandler(ctx.timeline)
         const handleInterceptor = this._createInterceptorHandler(ctx, addTimeline)
@@ -2334,20 +2336,21 @@ class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
             data: {}
         })
         const waitQueue: Array<() => void> = []
+        const acquire = (): Promise<void> => {
+            if (ctx.active < stats.settings.concurrency) {
+                ctx.active++
+                return Promise.resolve();
+            }
+            return new Promise((res) => waitQueue.push(() => { ctx.active++; res() }))
+        }
+        const release = () => {
+            ctx.active--
+            if (waitQueue.length > 0) {
+                const next = waitQueue.shift();
+                if (next) next();
+            }
+        }
         for(const task of stats.target) {
-            const acquire = (): Promise<void> => {
-                if (ctx.queue.size < stats.settings.concurrency) {
-                    return Promise.resolve();
-                }
-                return new Promise((res) => waitQueue.push(res))
-            }
-            const release = () => {
-                if (waitQueue.length > 0) {
-                    const next = waitQueue.shift();
-                    if (next) next();
-                }
-            }
-            
             let promise: Promise<{success: boolean, value: unknown}>;
             promise = this.runTask(task, {stats, root: ctx}, {acquire, release}).then(res => {
                 ctx.queue.delete(promise)

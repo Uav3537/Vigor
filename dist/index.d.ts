@@ -78,7 +78,7 @@ declare abstract class VigorStatus<C, Self> {
     protected readonly ctor: (config: C) => Self;
     protected readonly _config: C;
     constructor(config: Partial<C> | undefined, _base: C, ctor: (config: C) => Self);
-    protected _mergeConfig<C>(source: any, target: C | Partial<C> | undefined): C;
+    protected _mergeConfig(source: any, target: C | Partial<C> | undefined): C;
     protected _next(config: Partial<C>): Self;
     _getConfig(): C;
     _getBase(): C;
@@ -195,15 +195,74 @@ type VigorRetryContext = {
     attempt: number;
     delay: number;
     controller: AbortController;
-    timeline: Array<{
-        action: string;
-        content?: unknown;
-    }>;
+    timeline: Array<VigorRetryTimelineItem<any, any>>;
     stats: VigorRetryConfig;
+    flag: {
+        broke: boolean;
+        overwritten: boolean;
+        restarted: boolean;
+    };
+};
+type VigorRetryTimelineItem<I extends keyof VigorRetryInterceptorsFunctions, H extends keyof VigorRetryProcessHandler> = {
+    [K in keyof VigorRetryTimeline<I, H>]: {
+        action: K;
+        content: VigorRetryTimeline<I, H>[K];
+        time: number;
+    };
+}[keyof VigorRetryTimeline<I, H>];
+type VigorRetryAllowedApis<I extends keyof VigorRetryInterceptorsFunctions> = VigorRetryInterceptorsFunctions[I] extends VigorRetryInterceptorsFn<infer A, any> ? A : never;
+type VigorRetryProcessHandler = {
+    REQUEST_START: {};
+    REQUEST_ERROR: {
+        error: unknown;
+    };
+    RETRY_START: {};
+    RETRY_ERROR: {
+        error: unknown;
+    };
+};
+type VigorRetryTimeline<I extends keyof VigorRetryInterceptorsFunctions, H extends keyof VigorRetryProcessHandler> = {
+    ATTEMPT_INCREASED: {
+        attempt: VigorRetryContext["attempt"];
+    };
+    PROCESS_HANDLING: {
+        type: H;
+        data: VigorRetryProcessHandler[H];
+    };
+    TARGET_REQUEST_STARTED: {
+        target: VigorRetryConfig["target"];
+    };
+    TARGET_REQUEST_ENDED: {
+        target: VigorRetryConfig["target"];
+        took: number;
+    };
+    TARGET_API_CALLED: {
+        target: VigorRetryConfig["target"];
+        method: string;
+    };
+    INTERCEPTOR_LOOP_STARTED: {
+        interceptorType: I;
+        interceptors: Array<VigorRetryInterceptorsFunctions[I]>;
+    };
+    INTERCEPTOR_LOOP_ENDED: {
+        interceptorType: I;
+        interceptors: Array<VigorRetryInterceptorsFunctions[I]>;
+        took: number;
+    };
+    INTERCEPTOR_API_CALLED: {
+        [A in VigorRetryAllowedApis<I>]: {
+            interceptorType: I;
+            interceptor: VigorRetryInterceptorsFunctions[I];
+            method: A;
+            args: Parameters<VigorRetryInterceptorsApi<any>[A]>;
+        };
+    }[VigorRetryAllowedApis<I>];
 };
 declare class VigorRetry extends VigorStatus<VigorRetryConfig, VigorRetry> {
     constructor(config?: Partial<VigorRetryConfig>);
     private RetryAlgorithms;
+    private _createTimelineHandler;
+    private _createInterceptorHandler;
     target(func: VigorRetryConfig["target"]): VigorRetry;
     settings(func: ((s: VigorRetrySettings) => VigorRetrySettings) | VigorRetryConfig["settings"]): VigorRetry;
     interceptors(func: ((i: VigorRetryInterceptors) => VigorRetryInterceptors) | VigorRetryConfig["interceptors"]): VigorRetry;
@@ -271,16 +330,55 @@ type VigorParseConfig = {
 };
 type VigorParseContext = {
     stats: VigorParseConfig;
-    timeline: Array<{
-        action: string;
-        content?: unknown;
-    }>;
+    timeline: Array<VigorParseTimelineItem<any, any>>;
     result: unknown;
     error: unknown;
     response: Response;
+    flag: {
+        overwritten: boolean;
+    };
+};
+type VigorParseTimelineItem<I extends keyof VigorParseInterceptorsFunctions, H extends keyof VigorParseProcessHandler> = {
+    [K in keyof VigorParseTimeline<I, H>]: {
+        action: K;
+        content: VigorParseTimeline<I, H>[K];
+        time: number;
+    };
+}[keyof VigorParseTimeline<I, H>];
+type VigorParseAllowedApis<I extends keyof VigorParseInterceptorsFunctions> = VigorParseInterceptorsFunctions[I] extends VigorParseInterceptorsFn<infer A, any> ? A : never;
+type VigorParseProcessHandler = {
+    REQUEST_START: {};
+    REQUEST_ERROR: {
+        error: unknown;
+    };
+};
+type VigorParseTimeline<I extends keyof VigorParseInterceptorsFunctions, H extends keyof VigorParseProcessHandler> = {
+    PROCESS_HANDLING: {
+        type: H;
+        data: VigorRetryProcessHandler[H];
+    };
+    INTERCEPTOR_LOOP_STARTED: {
+        interceptorType: I;
+        interceptors: Array<VigorParseInterceptorsFunctions[I]>;
+    };
+    INTERCEPTOR_LOOP_ENDED: {
+        interceptorType: I;
+        interceptors: Array<VigorParseInterceptorsFunctions[I]>;
+        took: number;
+    };
+    INTERCEPTOR_API_CALLED: {
+        [A in VigorParseAllowedApis<I>]: {
+            interceptorType: I;
+            interceptor: VigorParseInterceptorsFunctions[I];
+            method: A;
+            args: Parameters<VigorParseInterceptorsApi<any>[A]>;
+        };
+    }[VigorParseAllowedApis<I>];
 };
 declare class VigorParse extends VigorStatus<VigorParseConfig, VigorParse> {
     constructor(config?: Partial<VigorParseConfig>);
+    private _createTimelineHandler;
+    private _createInterceptorHandler;
     target(response: VigorParseConfig["target"]): VigorParse;
     settings(func: ((i: VigorParseSettings) => VigorParseSettings) | VigorParseConfig["settings"]): VigorParse;
     strategies(func: ((i: VigorParseStrategies) => VigorParseStrategies) | VigorParseConfig["strategies"]): VigorParse;
@@ -315,7 +413,9 @@ type VigorFetchOptions<T = Record<string, any>> = {
     headers: HeadersInit | Record<string, any>;
     body?: XMLHttpRequestBodyInit | object | null;
 } & T;
+type VigorStringable = string | number | boolean | null | undefined | Date;
 type VigorFetchConfig = {
+    method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" | "CONNECT" | "TRACE";
     origin: Array<string>;
     path: Array<string>;
     query: Array<Record<string, VigorStringable | Array<VigorStringable>>>;
@@ -347,16 +447,84 @@ type VigorFetchContext = {
     result: unknown;
     error: unknown;
     options: VigorFetchOptions;
-    timeline: Array<{
-        action: string;
-        content?: unknown;
-    }>;
+    timeline: Array<VigorFetchTimelineItem<any, any>>;
     stats: VigorFetchConfig;
+    flag: {
+        overwritten: boolean;
+        restarted: boolean;
+    };
 };
-type VigorStringable = string | number | boolean | null | undefined | Date;
+type VigorFetchTimelineItem<I extends keyof VigorFetchInterceptorsFunctions, H extends keyof VigorFetchProcessHandler> = {
+    [K in keyof VigorFetchTimeline<I, H>]: {
+        action: K;
+        content: VigorFetchTimeline<I, H>[K];
+        time: number;
+    };
+}[keyof VigorFetchTimeline<I, H>];
+type VigorFetchAllowedApis<I extends keyof VigorFetchInterceptorsFunctions> = VigorFetchInterceptorsFunctions[I] extends VigorFetchInterceptorsFn<infer A, any> ? A : never;
+type VigorFetchProcessHandler = {
+    REQUEST_START: {};
+    REQUEST_ERROR: {
+        error: unknown;
+    };
+};
+type VigorFetchTimeline<I extends keyof VigorFetchInterceptorsFunctions, H extends keyof VigorFetchProcessHandler> = {
+    PROCESS_HANDLING: {
+        type: H;
+        data: VigorFetchProcessHandler[H];
+    };
+    BUILT_URL: {
+        url: ReturnType<VigorFetch["_buildUrl"]>;
+    };
+    SET_OPTIONS: {
+        options: VigorFetchContext["options"];
+    };
+    ENGINE_CREATED: {
+        retryEngine: VigorRetry;
+        parseEngine: VigorParse;
+    };
+    RETRY_STARTED: {
+        engine: VigorRetry;
+    };
+    RETRY_ENDED: {
+        engine: VigorRetry;
+        timeline: VigorRetryContext["timeline"];
+        took: number;
+        response: VigorFetchContext["response"];
+    };
+    PARSE_STARTED: {
+        engine: VigorParse;
+    };
+    PARSE_ENDED: {
+        engine: VigorParse;
+        timeline: VigorParseContext["timeline"];
+        took: number;
+        result: VigorFetchContext["result"];
+    };
+    INTERCEPTOR_LOOP_STARTED: {
+        interceptorType: I;
+        interceptors: Array<VigorFetchInterceptorsFunctions[I]>;
+    };
+    INTERCEPTOR_LOOP_ENDED: {
+        interceptorType: I;
+        interceptors: Array<VigorFetchInterceptorsFunctions[I]>;
+        took: number;
+    };
+    INTERCEPTOR_API_CALLED: {
+        [A in VigorFetchAllowedApis<I>]: {
+            interceptorType: I;
+            interceptor: VigorFetchInterceptorsFunctions[I];
+            method: A;
+            args: Parameters<VigorFetchInterceptorsApi<any>[A]>;
+        };
+    }[VigorFetchAllowedApis<I>];
+};
 declare class VigorFetch extends VigorStatus<VigorFetchConfig, VigorFetch> {
     constructor(config?: Partial<VigorFetchConfig>);
+    private _createTimelineHandler;
+    private _createInterceptorHandler;
     private _stringifyList;
+    method(str: VigorFetchConfig["method"]): VigorFetch;
     origin(...strs: VigorIncludeSpread<VigorStringable>): VigorFetch;
     path(...strs: VigorIncludeSpread<VigorStringable>): VigorFetch;
     query(...strs: VigorIncludeSpread<VigorFetchConfig["query"][number]>): VigorFetch;
@@ -382,10 +550,10 @@ declare class VigorAllSettings extends VigorStatus<VigorAllSettingsConfig, Vigor
     onlySuccess(num: VigorAllSettingsConfig["onlySuccess"]): VigorAllSettings;
 }
 type VigorAllInterceptorsConfig = {
-    before: Array<VigorAllInterceptorsFunctions["before"]>;
-    after: Array<VigorAllInterceptorsFunctions["after"]>;
+    before: Array<VigorAllEachInterceptorsFunctions["before"]>;
+    after: Array<VigorAllEachInterceptorsFunctions["after"]>;
     result: Array<VigorAllInterceptorsFunctions["result"]>;
-    onError: Array<VigorAllInterceptorsFunctions["onError"]>;
+    onError: Array<VigorAllEachInterceptorsFunctions["onError"]>;
 };
 declare class VigorAllInterceptors extends VigorStatus<VigorAllInterceptorsConfig, VigorAllInterceptors> {
     constructor(config?: Partial<VigorAllInterceptorsConfig>);
@@ -403,37 +571,34 @@ type VigorAllInterceptorsApi<R> = {
     setResult: (unk: Array<R>) => void;
     throwError: <E extends Error>(err: E) => never;
 };
-type VigorAllInterceptorsEachApi<R> = {
+type VigorAllEachInterceptorsApi<R> = {
     setResult: (unk: R) => void;
     throwError: <E extends Error>(err: E) => never;
 };
 type VigorAllInterceptorsFn<A extends keyof VigorAllInterceptorsApi<R>, R = unknown> = (ctx: VigorAllContext, api: Pick<VigorAllInterceptorsApi<R>, A>) => void | Promise<void>;
-type VigorAllInterceptorsEachFn<A extends keyof VigorAllInterceptorsApi<R>, R = unknown> = (ctx: VigorAllEachContext, api: Pick<VigorAllInterceptorsEachApi<R>, A>) => void | Promise<void>;
+type VigorAllEachInterceptorsFn<A extends keyof VigorAllInterceptorsApi<R>, R = unknown> = (ctx: VigorAllEachContext, api: Pick<VigorAllEachInterceptorsApi<R>, A>) => void | Promise<void>;
 type VigorAllInterceptorsFunctions = {
-    before: VigorAllInterceptorsEachFn<"throwError">;
-    after: VigorAllInterceptorsEachFn<"setResult" | "throwError">;
     result: VigorAllInterceptorsFn<"setResult" | "throwError">;
-    onError: VigorAllInterceptorsEachFn<"setResult" | "throwError">;
+};
+type VigorAllEachInterceptorsFunctions = {
+    before: VigorAllEachInterceptorsFn<"throwError">;
+    after: VigorAllEachInterceptorsFn<"setResult" | "throwError">;
+    onError: VigorAllEachInterceptorsFn<"setResult" | "throwError">;
 };
 type VigorAllContext = {
     result: Array<unknown>;
-    timeline: Array<{
-        action: string;
-        content: unknown;
-    }>;
+    timeline: Array<VigorAllTimelineItem<any, any>>;
     stats: VigorAllConfig;
     queue: Set<Promise<{
         success: boolean;
         value: unknown;
     }>>;
+    active: number;
 };
 type VigorAllEachContext = {
     result: unknown;
     error: unknown;
-    timeline: Array<{
-        action: string;
-        content: unknown;
-    }>;
+    timeline: Array<VigorAllEachTimelineItem<any, any>>;
     stats: VigorAllConfig;
     root: VigorAllContext;
     target: VigorAllConfig["target"][number];
@@ -441,9 +606,110 @@ type VigorAllEachContext = {
         acquire: () => Promise<void>;
         release: () => void;
     };
+    flag: {
+        overwritten: boolean;
+    };
+};
+type VigorAllTimelineItem<I extends keyof VigorAllInterceptorsFunctions, H extends keyof VigorAllProcessHandler> = {
+    [K in keyof VigorAllTimeline<I, H>]: {
+        action: K;
+        content: VigorAllTimeline<I, H>[K];
+        time: number;
+    };
+}[keyof VigorAllTimeline<I, H>];
+type VigorAllAllowedApis<I extends keyof VigorAllInterceptorsFunctions> = VigorAllInterceptorsFunctions[I] extends VigorAllInterceptorsFn<infer A, any> ? A : never;
+type VigorAllProcessHandler = {
+    REQUEST_START: {};
+    REQUEST_ERROR: {
+        error: unknown;
+    };
+};
+type VigorAllTimeline<I extends keyof VigorAllInterceptorsFunctions, H extends keyof VigorAllProcessHandler> = {
+    PROCESS_HANDLING: {
+        type: H;
+        data: VigorAllProcessHandler[H];
+    };
+    QUEUE_REQUEST_STARTED: {
+        queue: VigorAllContext["queue"];
+    };
+    QUEUE_REQUEST_ENDED: {
+        queue: VigorAllContext["queue"];
+        took: number;
+    };
+    INTERCEPTOR_LOOP_STARTED: {
+        interceptorType: I;
+        interceptors: Array<VigorAllInterceptorsFunctions[I]>;
+    };
+    INTERCEPTOR_LOOP_ENDED: {
+        interceptorType: I;
+        interceptors: Array<VigorAllInterceptorsFunctions[I]>;
+        took: number;
+    };
+    INTERCEPTOR_API_CALLED: {
+        [A in VigorAllAllowedApis<I>]: {
+            interceptorType: I;
+            interceptor: VigorAllInterceptorsFunctions[I];
+            method: A;
+            args: Parameters<VigorAllInterceptorsApi<any>[A]>;
+        };
+    }[VigorAllAllowedApis<I>];
+};
+type VigorAllEachTimelineItem<I extends keyof VigorAllEachInterceptorsFunctions, H extends keyof VigorAllEachProcessHandler> = {
+    [K in keyof VigorAllEachTimeline<I, H>]: {
+        action: K;
+        content: VigorAllEachTimeline<I, H>[K];
+        time: number;
+    };
+}[keyof VigorAllEachTimeline<I, H>];
+type VigorAllEachAllowedApis<I extends keyof VigorAllEachInterceptorsFunctions> = VigorAllEachInterceptorsFunctions[I] extends VigorAllEachInterceptorsFn<infer A, any> ? A : never;
+type VigorAllEachProcessHandler = {
+    TASK_START: {};
+    TASK_ERROR: {
+        error: unknown;
+    };
+};
+type VigorAllEachTimeline<I extends keyof VigorAllEachInterceptorsFunctions, H extends keyof VigorAllEachProcessHandler> = {
+    PROCESS_HANDLING: {
+        type: H;
+        data: VigorAllEachProcessHandler[H];
+    };
+    TASK_ACQUIRED: {
+        target: VigorAllEachContext["target"];
+    };
+    TASK_RELEASED: {
+        target: VigorAllEachContext["target"];
+    };
+    TASK_STARTED: {
+        target: VigorAllEachContext["target"];
+    };
+    TASK_ENDED: {
+        target: VigorAllEachContext["target"];
+        took: number;
+    };
+    INTERCEPTOR_LOOP_STARTED: {
+        interceptorType: I;
+        interceptors: Array<VigorAllEachInterceptorsFunctions[I]>;
+    };
+    INTERCEPTOR_LOOP_ENDED: {
+        interceptorType: I;
+        interceptors: Array<VigorAllEachInterceptorsFunctions[I]>;
+        took: number;
+    };
+    INTERCEPTOR_API_CALLED: {
+        [A in VigorAllEachAllowedApis<I>]: {
+            interceptorType: I;
+            interceptor: VigorAllEachInterceptorsFunctions[I];
+            method: A;
+            args: Parameters<VigorAllEachInterceptorsApi<any>[A]>;
+        };
+    }[VigorAllEachAllowedApis<I>];
 };
 declare class VigorAll extends VigorStatus<VigorAllConfig, VigorAll> {
     constructor(config?: Partial<VigorAllConfig>);
+    private _createTimelineHandler;
+    private _createInterceptorHandler;
+    private _createEachTimelineHandler;
+    private _createEachInterceptorHandler;
     target(...funcs: VigorIncludeSpread<VigorAllConfig["target"][number]>): VigorAll;
     settings(func: ((s: VigorAllSettings) => VigorAllSettings) | VigorAllConfig["settings"]): VigorAll;
     interceptors(func: ((s: VigorAllInterceptors) => VigorAllInterceptors) | VigorAllConfig["interceptors"]): VigorAll;

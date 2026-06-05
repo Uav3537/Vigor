@@ -206,6 +206,36 @@ class VigorRetry extends VigorStatus {
         backoff: (config) => new VigorRetryAlgorithmsBackoff(config),
         custom: (config) => new VigorRetryAlgorithmsCustom(config)
     };
+    _createTimelineHandler(timeline) {
+        return (action, content) => {
+            timeline.push({
+                action: action,
+                content: content,
+                time: Date.now()
+            });
+        };
+    }
+    _createInterceptorHandler(ctx, addTimeline) {
+        return async (interceptorType, api) => {
+            const interceptorsConfig = ctx["stats"]["interceptors"];
+            const interceptors = interceptorsConfig[interceptorType];
+            addTimeline("INTERCEPTOR_LOOP_STARTED", {
+                interceptorType: interceptorType,
+                interceptors,
+            });
+            const startTime = performance.now();
+            for (const func of interceptors) {
+                const scopedApi = api(interceptorType, func);
+                await func(ctx, scopedApi);
+            }
+            const endTime = performance.now();
+            addTimeline("INTERCEPTOR_LOOP_ENDED", {
+                interceptorType: interceptorType,
+                interceptors,
+                took: endTime - startTime
+            });
+        };
+    }
     target(func) { return this._next({ target: func }); }
     settings(func) {
         if (typeof func === 'function') {
@@ -236,11 +266,18 @@ class VigorRetry extends VigorStatus {
             controller: VigorDefault,
             timeline: timeline,
             stats,
+            flag: {
+                broke: false,
+                overwritten: false,
+                restarted: false
+            }
         };
-        const throwError = (error) => {
-            ctx.timeline.push({ action: "throwError called", content: error });
-            throw error;
-        };
+        const addTimeline = this._createTimelineHandler(ctx.timeline);
+        const handleInterceptor = this._createInterceptorHandler(ctx, addTimeline);
+        addTimeline("PROCESS_HANDLING", {
+            type: "REQUEST_START",
+            data: {}
+        });
         try {
             if (typeof stats.target !== 'function')
                 throw new VigorRetryError("INVALID_TARGET", {
@@ -254,23 +291,48 @@ class VigorRetry extends VigorStatus {
                 });
             while (ctx.attempt < stats.settings.attempt) {
                 ctx.attempt++;
-                ctx.timeline.push({ action: "increased attempt", content: ctx.attempt });
-                let broke = false;
-                const breakRetry = (error) => {
-                    ctx.timeline.push({ action: "breakRetry called", content: error });
-                    broke = true;
-                    throw error;
-                };
+                addTimeline("ATTEMPT_INCREASED", {
+                    attempt: ctx.attempt
+                });
                 try {
-                    ctx.timeline.push({ action: "process request_once handling", content: ctx.attempt });
+                    addTimeline("PROCESS_HANDLING", {
+                        type: "RETRY_START",
+                        data: {}
+                    });
                     const controller = new AbortController();
                     const timeoutController = new AbortController();
                     const signal = AbortSignal.any([controller.signal, timeoutController.signal, ...stats.abortSignals]);
-                    const abort = (err) => controller.abort(err);
-                    ctx.timeline.push({ action: "interceptor handling: before", content: stats.interceptors.before });
-                    for (const func of stats.interceptors.before) {
-                        await func(ctx, { throwError, breakRetry, abort });
-                    }
+                    await handleInterceptor("before", (interceptorType, func) => ({
+                        abort: (error) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "abort",
+                                args: [error]
+                            });
+                            controller.abort(error);
+                            throw error;
+                        },
+                        breakRetry: (error) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "breakRetry",
+                                args: [error]
+                            });
+                            ctx.flag.broke = true;
+                            throw error;
+                        },
+                        throwError: (error) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "throwError",
+                                args: [error]
+                            });
+                            throw error;
+                        }
+                    }));
                     const timeoutTimer = setTimeout(() => {
                         clearTimeout(timeoutTimer);
                         timeoutController.abort(new VigorRetryError("TIMED_OUT", {
@@ -284,6 +346,18 @@ class VigorRetry extends VigorStatus {
                     signal.throwIfAborted();
                     let onAbort;
                     try {
+                        addTimeline("TARGET_REQUEST_STARTED", {
+                            target: stats.target
+                        });
+                        const abort = (error) => {
+                            addTimeline("TARGET_API_CALLED", {
+                                target: stats.target,
+                                method: "abort"
+                            });
+                            controller.abort(error);
+                            throw error;
+                        };
+                        const started = performance.now();
                         ctx.result = await Promise.race([
                             stats.target(ctx, { abort, signal }),
                             new Promise((_, rej) => {
@@ -291,60 +365,134 @@ class VigorRetry extends VigorStatus {
                                 signal.addEventListener("abort", onAbort);
                             })
                         ]);
+                        const endTime = performance.now();
+                        addTimeline("TARGET_REQUEST_ENDED", {
+                            target: stats.target,
+                            took: endTime - started
+                        });
                     }
                     finally {
                         clearTimeout(timeoutTimer);
                         if (onAbort)
                             signal.removeEventListener("abort", onAbort);
                     }
-                    const setResult = (unk) => {
-                        ctx.timeline.push({ action: "setResult called", content: unk });
-                        ctx.result = unk;
-                        return unk;
-                    };
-                    ctx.timeline.push({ action: "interceptor handling: after", content: stats.interceptors.after });
-                    for (const func of stats.interceptors.after) {
-                        await func(ctx, { setResult, throwError, breakRetry });
-                    }
-                    ctx.timeline.push({ action: "interceptor handling: result", content: stats.interceptors.result });
-                    for (const func of stats.interceptors.result) {
-                        await func(ctx, { setResult, throwError });
-                    }
+                    await handleInterceptor("after", (interceptorType, func) => ({
+                        setResult: (unknown) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "setResult",
+                                args: [unknown]
+                            });
+                            ctx.result = unknown;
+                            return unknown;
+                        },
+                        throwError: (error) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "throwError",
+                                args: [error]
+                            });
+                            throw error;
+                        },
+                        breakRetry: (error) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "breakRetry",
+                                args: [error]
+                            });
+                            ctx.flag.broke = true;
+                            throw error;
+                        },
+                    }));
+                    await handleInterceptor("result", (interceptorType, func) => ({
+                        setResult: (unknown) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "setResult",
+                                args: [unknown]
+                            });
+                            ctx.result = unknown;
+                            return unknown;
+                        },
+                        throwError: (error) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "throwError",
+                                args: [error]
+                            });
+                            throw error;
+                        },
+                    }));
                     return ctx.result;
                 }
                 catch (error) {
                     ctx.error = error;
-                    ctx.timeline.push({ action: "process error_once handling", content: error });
-                    if (broke)
+                    addTimeline("PROCESS_HANDLING", {
+                        type: "RETRY_ERROR",
+                        data: {
+                            error
+                        }
+                    });
+                    if (ctx.flag.broke)
                         throw error;
                     let proceed = true;
-                    const proceedRetry = () => {
-                        ctx.timeline.push({ action: "proceedRetry called", content: true });
-                        return proceed = true;
-                    };
-                    const cancelRetry = () => {
-                        ctx.timeline.push({ action: "cancelRetry called", content: false });
-                        return proceed = false;
-                    };
-                    ctx.timeline.push({ action: "interceptor handling: retryIf", content: stats.interceptors.result });
-                    for (const func of stats.interceptors.retryIf) {
-                        await func(ctx, { proceedRetry, cancelRetry });
-                    }
+                    await handleInterceptor("retryIf", (interceptorType, func) => ({
+                        proceedRetry: () => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "proceedRetry",
+                                args: []
+                            });
+                            return proceed = true;
+                        },
+                        cancelRetry: () => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "cancelRetry",
+                                args: []
+                            });
+                            return proceed = false;
+                        }
+                    }));
                     if (!proceed)
                         throw error;
                     ctx.delay = VigorDefault;
-                    const setDelay = (num) => {
-                        ctx.timeline.push({ action: "setDelay called", content: num });
-                        return ctx.delay = num;
-                    };
-                    const setAttempt = (num) => {
-                        ctx.timeline.push({ action: "setAttempt called", content: num });
-                        return ctx.attempt = num;
-                    };
-                    ctx.timeline.push({ action: "interceptor handling: onRetry", content: stats.interceptors.onRetry });
-                    for (const func of stats.interceptors.onRetry) {
-                        await func(ctx, { throwError, setDelay, setAttempt });
-                    }
+                    await handleInterceptor("onRetry", (interceptorType, func) => ({
+                        throwError: (error) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "throwError",
+                                args: [error]
+                            });
+                            throw error;
+                        },
+                        setDelay: (number) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "setDelay",
+                                args: [number]
+                            });
+                            return ctx.delay = number;
+                        },
+                        setAttempt: (number) => {
+                            addTimeline("INTERCEPTOR_API_CALLED", {
+                                interceptorType,
+                                interceptor: func,
+                                method: "setAttempt",
+                                args: [number]
+                            });
+                            return ctx.attempt = number;
+                        }
+                    }));
                     if (typeof ctx.delay !== 'number')
                         ctx.delay = stats.algorithm(ctx.attempt) + Math.random() * stats.settings.jitter;
                     const delay = ctx.delay;
@@ -361,26 +509,47 @@ class VigorRetry extends VigorStatus {
         }
         catch (error) {
             ctx.error = error;
-            let overwritten = false;
-            const setResult = (unk) => {
-                ctx.timeline.push({ action: "setResult called", content: unk });
-                ctx.result = unk;
-                overwritten = true;
-                return unk;
-            };
-            let restarted = false;
-            const restart = () => {
-                ctx.timeline.push({ action: "restart called" });
-                restarted = true;
-            };
-            ctx.timeline.push({ action: "interceptor handling: onError", content: stats.interceptors.onError });
-            for (const func of stats.interceptors.onError) {
-                await func(ctx, { setResult, throwError, restart });
-            }
-            if (restarted) {
+            addTimeline("PROCESS_HANDLING", {
+                type: "REQUEST_ERROR",
+                data: {
+                    error
+                }
+            });
+            await handleInterceptor("onError", (interceptorType, func) => ({
+                setResult: (unknown) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    });
+                    ctx.result = unknown;
+                    ctx.flag.overwritten = true;
+                    return unknown;
+                },
+                throwError: (error) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    });
+                    throw error;
+                },
+                restart: () => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "restart",
+                        args: []
+                    });
+                    ctx.flag.restarted = true;
+                }
+            }));
+            if (ctx.flag.restarted) {
                 return await this.request(stats, ctx.timeline);
             }
-            if (overwritten)
+            if (ctx.flag.overwritten)
                 return ctx.result;
             if (stats.settings.default !== VigorDefault)
                 return stats.settings.default;
@@ -405,7 +574,6 @@ class VigorParseStrategies extends VigorStatus {
             funcs: []
         };
         super(config, base, (c) => new VigorParseStrategies(c));
-        this._config.funcs.push(this.ParseAutoAlgorithms.contentType);
     }
     ParseAutoHeaders = [
         { header: "application/json", regExp: /application\/(.+\+)?json(.+\+)?/i, method: (res) => res.json() },
@@ -504,6 +672,36 @@ class VigorParse extends VigorStatus {
         };
         super(config, base, (c) => new VigorParse(c));
     }
+    _createTimelineHandler(timeline) {
+        return (action, content) => {
+            timeline.push({
+                action: action,
+                content: content,
+                time: Date.now()
+            });
+        };
+    }
+    _createInterceptorHandler(ctx, addTimeline) {
+        return async (interceptorType, api) => {
+            const interceptorsConfig = ctx["stats"]["interceptors"];
+            const interceptors = interceptorsConfig[interceptorType];
+            addTimeline("INTERCEPTOR_LOOP_STARTED", {
+                interceptorType: interceptorType,
+                interceptors,
+            });
+            const startTime = performance.now();
+            for (const func of interceptors) {
+                const scopedApi = api(interceptorType, func);
+                await func(ctx, scopedApi);
+            }
+            const endTime = performance.now();
+            addTimeline("INTERCEPTOR_LOOP_ENDED", {
+                interceptorType: interceptorType,
+                interceptors,
+                took: endTime - startTime
+            });
+        };
+    }
     target(response) { return this._next({ target: response }); }
     settings(func) {
         if (typeof func === 'function') {
@@ -532,11 +730,16 @@ class VigorParse extends VigorStatus {
             response: target,
             result: VigorDefault,
             error: VigorDefault,
+            flag: {
+                overwritten: false
+            }
         };
-        const throwError = (err) => {
-            ctx.timeline.push({ action: "throwError called", content: err });
-            throw err;
-        };
+        const addTimeline = this._createTimelineHandler(ctx.timeline);
+        const handleInterceptor = this._createInterceptorHandler(ctx, addTimeline);
+        addTimeline("PROCESS_HANDLING", {
+            type: "REQUEST_START",
+            data: {}
+        });
         try {
             if (target === VigorDefault)
                 throw new VigorParseError("INVALID_TARGET", {
@@ -547,10 +750,17 @@ class VigorParse extends VigorStatus {
                     },
                     context: ctx
                 });
-            ctx.timeline.push({ action: "interceptor handling: before", content: stats.interceptors.before });
-            for (const func of stats.interceptors.before) {
-                await func(ctx, { throwError });
-            }
+            await handleInterceptor("before", (interceptorType, func) => ({
+                throwError: (error) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    });
+                    throw error;
+                },
+            }));
             if (stats.settings.raw) {
                 ctx.result = ctx.response;
             }
@@ -579,35 +789,81 @@ class VigorParse extends VigorStatus {
                         context: ctx
                     });
             }
-            const setResult = (unk) => {
-                ctx.timeline.push({ action: "setResult called", content: unk });
-                ctx.result = unk;
-                return unk;
-            };
-            ctx.timeline.push({ action: "interceptor handling: after", content: stats.interceptors.after });
-            for (const func of stats.interceptors.after) {
-                await func(ctx, { setResult, throwError });
-            }
-            ctx.timeline.push({ action: "interceptor handling: result", content: stats.interceptors.result });
-            for (const func of stats.interceptors.result) {
-                await func(ctx, { setResult, throwError });
-            }
+            await handleInterceptor("after", (interceptorType, func) => ({
+                setResult: (unknown) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    });
+                    ctx.result = unknown;
+                    return unknown;
+                },
+                throwError: (error) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    });
+                    throw error;
+                },
+            }));
+            await handleInterceptor("result", (interceptorType, func) => ({
+                setResult: (unknown) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    });
+                    ctx.result = unknown;
+                    return unknown;
+                },
+                throwError: (error) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    });
+                    throw error;
+                },
+            }));
             return ctx.result;
         }
         catch (error) {
             ctx.error = error;
-            let overwritten = false;
-            const setResult = (unk) => {
-                ctx.timeline.push({ action: "setResult called", content: unk });
-                ctx.result = unk;
-                overwritten = true;
-                return unk;
-            };
-            ctx.timeline.push({ action: "interceptor handling: onError", content: stats.interceptors.onError });
-            for (const func of stats.interceptors.onError) {
-                await func(ctx, { setResult, throwError });
-            }
-            if (overwritten)
+            addTimeline("PROCESS_HANDLING", {
+                type: "REQUEST_ERROR",
+                data: {
+                    error
+                }
+            });
+            await handleInterceptor("onError", (interceptorType, func) => ({
+                setResult: (unknown) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    });
+                    ctx.result = unknown;
+                    ctx.flag.overwritten = true;
+                    return unknown;
+                },
+                throwError: (error) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    });
+                    throw error;
+                },
+            }));
+            if (ctx.flag.overwritten)
                 return ctx.result;
             if (stats.settings.default !== VigorDefault)
                 return stats.settings.default;
@@ -661,6 +917,36 @@ class VigorFetch extends VigorStatus {
         };
         super(config, base, (c) => new VigorFetch(c));
     }
+    _createTimelineHandler(timeline) {
+        return (action, content) => {
+            timeline.push({
+                action: action,
+                content: content,
+                time: Date.now()
+            });
+        };
+    }
+    _createInterceptorHandler(ctx, addTimeline) {
+        return async (interceptorType, api) => {
+            const interceptorsConfig = ctx["stats"]["interceptors"];
+            const interceptors = interceptorsConfig[interceptorType];
+            addTimeline("INTERCEPTOR_LOOP_STARTED", {
+                interceptorType: interceptorType,
+                interceptors,
+            });
+            const startTime = performance.now();
+            for (const func of interceptors) {
+                const scopedApi = api(interceptorType, func);
+                await func(ctx, scopedApi);
+            }
+            const endTime = performance.now();
+            addTimeline("INTERCEPTOR_LOOP_ENDED", {
+                interceptorType: interceptorType,
+                interceptors,
+                took: endTime - startTime
+            });
+        };
+    }
     _stringifyList(unkList) {
         return unkList
             .filter(unk => unk !== null && unk !== undefined)
@@ -670,6 +956,7 @@ class VigorFetch extends VigorStatus {
             return String(unk);
         });
     }
+    method(str) { return this._next({ method: str }); }
     origin(...strs) { return this._next({ origin: this._stringifyList(strs.flat()) }); }
     path(...strs) { return this._next({ path: this._stringifyList(strs.flat()) }); }
     query(...strs) { return this._next({ query: strs.flat() }); }
@@ -777,11 +1064,17 @@ class VigorFetch extends VigorStatus {
             error: VigorDefault,
             timeline: timeline,
             stats,
+            flag: {
+                overwritten: false,
+                restarted: false
+            }
         };
-        const throwError = (err) => {
-            ctx.timeline.push({ action: "throwError called", content: err });
-            throw err;
-        };
+        const addTimeline = this._createTimelineHandler(ctx.timeline);
+        const handleInterceptor = this._createInterceptorHandler(ctx, addTimeline);
+        addTimeline("PROCESS_HANDLING", {
+            type: "REQUEST_START",
+            data: {}
+        });
         try {
             try {
                 new URL(stats.origin[0]);
@@ -796,13 +1089,18 @@ class VigorFetch extends VigorStatus {
                 });
             }
             ctx.href = this._buildUrl(stats.origin, stats.path, stats.query, stats.hash);
+            addTimeline("BUILT_URL", {
+                url: ctx.href
+            });
             const { headers, body, ...others } = stats.options;
-            ctx.options = {
-                ...others,
-                headers: {}
-            };
             const hasBody = body !== VigorDefault &&
                 body !== undefined;
+            const method = stats.method || (hasBody ? 'POST' : 'GET');
+            ctx.options = {
+                ...others,
+                method: method,
+                headers: {}
+            };
             if (hasBody) {
                 const normalized = this._normalizeOptions(body);
                 if (normalized.body !== undefined) {
@@ -811,19 +1109,9 @@ class VigorFetch extends VigorStatus {
                 Object.assign(ctx.options.headers, normalized.headers);
             }
             Object.assign(ctx.options.headers, headers);
-            ctx.timeline.push({ action: "options set", content: ctx.options });
-            const setOptions = (unk) => {
-                ctx.timeline.push({ action: "setOptions called", content: unk });
-                return ctx.options = unk;
-            };
-            const setHeaders = (unk) => {
-                ctx.timeline.push({ action: "setHeaders called", content: unk });
-                return ctx.options.headers = unk;
-            };
-            const setBody = (unk) => {
-                ctx.timeline.push({ action: "setBody called", content: unk });
-                return ctx.options.body = unk;
-            };
+            addTimeline("SET_OPTIONS", {
+                options: ctx.options
+            });
             const fetchTask = async (ctx2, { abort, signal }) => {
                 ctx.options.signal = signal;
                 const result = await fetch(ctx.href, ctx.options);
@@ -882,55 +1170,167 @@ class VigorFetch extends VigorStatus {
                     }
                 }
             };
-            stats.retryConfig.interceptors.after.unshift(throwStatus);
-            stats.retryConfig.interceptors.retryIf.unshift(handleBlacklist);
-            stats.retryConfig.interceptors.onRetry.unshift(handleRatelimit);
+            stats.retryConfig.interceptors.after = [throwStatus, ...stats.retryConfig.interceptors.after];
+            stats.retryConfig.interceptors.retryIf = [handleBlacklist, ...stats.retryConfig.interceptors.retryIf];
+            stats.retryConfig.interceptors.onRetry = [handleRatelimit, ...stats.retryConfig.interceptors.onRetry];
             const retryEngine = new VigorRetry(stats.retryConfig)
                 .target(fetchTask);
             const parseEngine = new VigorParse(stats.parseConfig);
-            ctx.timeline.push({ action: "interceptor handling: before", content: stats.interceptors.before });
-            for (const func of stats.interceptors.before) {
-                await func(ctx, { throwError, setOptions, setHeaders, setBody });
-            }
-            ctx.response = await retryEngine.request(undefined, timeline);
-            ctx.result = await parseEngine.target(ctx.response).request(undefined, timeline);
-            const setResult = (unk) => {
-                ctx.timeline.push({ action: "setResult called", content: unk });
-                ctx.result = unk;
-                return unk;
-            };
-            ctx.timeline.push({ action: "interceptor handling: after", content: stats.interceptors.after });
-            for (const func of stats.interceptors.after) {
-                await func(ctx, { setResult, throwError });
-            }
-            ctx.timeline.push({ action: "interceptor handling: result", content: stats.interceptors.result });
-            for (const func of stats.interceptors.result) {
-                await func(ctx, { setResult, throwError });
-            }
+            addTimeline("ENGINE_CREATED", {
+                retryEngine,
+                parseEngine
+            });
+            await handleInterceptor("before", (interceptorType, func) => ({
+                throwError: (error) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    });
+                    throw error;
+                },
+                setOptions: (unknown) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setOptions",
+                        args: [unknown]
+                    });
+                    return ctx.options = unknown;
+                },
+                setHeaders: (unknown) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setHeaders",
+                        args: [unknown]
+                    });
+                    return ctx.options.headers = unknown;
+                },
+                setBody: (unknown) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setBody",
+                        args: [unknown]
+                    });
+                    return ctx.options.body = unknown;
+                }
+            }));
+            addTimeline("RETRY_STARTED", {
+                engine: retryEngine
+            });
+            const retryStart = performance.now();
+            const retryTimeline = [];
+            ctx.response = await retryEngine.request(undefined, retryTimeline);
+            const retryEnd = performance.now();
+            addTimeline("RETRY_ENDED", {
+                engine: retryEngine,
+                timeline: retryTimeline,
+                took: retryEnd - retryStart,
+                response: ctx.response
+            });
+            addTimeline("PARSE_STARTED", {
+                engine: parseEngine
+            });
+            const parseStart = performance.now();
+            const parseTimeline = [];
+            ctx.result = await parseEngine.target(ctx.response).request(undefined, parseTimeline);
+            const parseEnd = performance.now();
+            addTimeline("PARSE_ENDED", {
+                engine: parseEngine,
+                timeline: parseTimeline,
+                took: parseEnd - parseStart,
+                result: ctx.result
+            });
+            await handleInterceptor("after", (interceptorType, func) => ({
+                setResult: (unknown) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    });
+                    ctx.result = unknown;
+                    return unknown;
+                },
+                throwError: (error) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    });
+                    throw error;
+                },
+            }));
+            await handleInterceptor("result", (interceptorType, func) => ({
+                setResult: (unknown) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    });
+                    ctx.result = unknown;
+                    return unknown;
+                },
+                throwError: (error) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    });
+                    throw error;
+                },
+            }));
             return ctx.result;
         }
         catch (error) {
             ctx.error = error;
-            let overwritten = false;
-            const setResult = (unk) => {
-                ctx.timeline.push({ action: "setResult called", content: unk });
-                ctx.result = unk;
-                overwritten = true;
-                return unk;
-            };
-            let restarted = false;
-            const restart = () => {
-                ctx.timeline.push({ action: "restart called" });
-                restarted = true;
-            };
-            ctx.timeline.push({ action: "interceptor handling: onError", content: stats.interceptors.onError });
-            for (const func of stats.interceptors.onError) {
-                await func(ctx, { setResult, throwError, restart });
+            addTimeline("PROCESS_HANDLING", {
+                type: "REQUEST_ERROR",
+                data: {
+                    error
+                }
+            });
+            await handleInterceptor("onError", (interceptorType, func) => ({
+                setResult: (unknown) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    });
+                    ctx.result = unknown;
+                    ctx.flag.overwritten = true;
+                    return unknown;
+                },
+                throwError: (error) => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    });
+                    throw error;
+                },
+                restart: () => {
+                    addTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "restart",
+                        args: []
+                    });
+                    ctx.flag.restarted = true;
+                }
+            }));
+            if (ctx.flag.restarted) {
+                return await this.request(stats, ctx.timeline);
             }
-            if (restarted) {
-                return await this.request(stats, timeline);
-            }
-            if (overwritten)
+            if (ctx.flag.overwritten)
                 return ctx.result;
             if (stats.settings.default !== VigorDefault)
                 return stats.settings.default;
@@ -973,6 +1373,66 @@ class VigorAll extends VigorStatus {
         };
         super(config, base, (c) => new VigorAll(c));
     }
+    _createTimelineHandler(timeline) {
+        return (action, content) => {
+            timeline.push({
+                action: action,
+                content: content,
+                time: Date.now()
+            });
+        };
+    }
+    _createInterceptorHandler(ctx, addTimeline) {
+        return async (interceptorType, api) => {
+            const interceptorsConfig = ctx["stats"]["interceptors"];
+            const interceptors = interceptorsConfig[interceptorType];
+            addTimeline("INTERCEPTOR_LOOP_STARTED", {
+                interceptorType: interceptorType,
+                interceptors,
+            });
+            const startTime = performance.now();
+            for (const func of interceptors) {
+                const scopedApi = api(interceptorType, func);
+                await func(ctx, scopedApi);
+            }
+            const endTime = performance.now();
+            addTimeline("INTERCEPTOR_LOOP_ENDED", {
+                interceptorType: interceptorType,
+                interceptors,
+                took: endTime - startTime
+            });
+        };
+    }
+    _createEachTimelineHandler(timeline) {
+        return (action, content) => {
+            timeline.push({
+                action: action,
+                content: content,
+                time: Date.now()
+            });
+        };
+    }
+    _createEachInterceptorHandler(ctx, addEachTimeline) {
+        return async (interceptorType, api) => {
+            const interceptorsConfig = ctx["stats"]["interceptors"];
+            const interceptors = interceptorsConfig[interceptorType];
+            addEachTimeline("INTERCEPTOR_LOOP_STARTED", {
+                interceptorType: interceptorType,
+                interceptors,
+            });
+            const startTime = performance.now();
+            for (const func of interceptors) {
+                const scopedApi = api(interceptorType, func);
+                await func(ctx, scopedApi);
+            }
+            const endTime = performance.now();
+            addEachTimeline("INTERCEPTOR_LOOP_ENDED", {
+                interceptorType: interceptorType,
+                interceptors,
+                took: endTime - startTime
+            });
+        };
+    }
     target(...funcs) { return this._next({ target: funcs.flat() }); }
     settings(func) {
         if (typeof func === 'function') {
@@ -994,56 +1454,108 @@ class VigorAll extends VigorStatus {
             stats,
             root,
             target: task,
-            semaphore
+            semaphore,
+            flag: {
+                overwritten: false
+            }
         };
-        const throwError = (err) => {
-            ctx.timeline.push({ action: "throwError called", content: err });
-            throw err;
-        };
+        const addEachTimeline = this._createEachTimelineHandler(ctx.timeline);
+        const handleEachInterceptor = this._createEachInterceptorHandler(ctx, addEachTimeline);
+        addEachTimeline("PROCESS_HANDLING", {
+            type: "TASK_START",
+            data: {}
+        });
         try {
             try {
                 await semaphore.acquire();
-                ctx.timeline.push({ action: "task acquired", content: ctx.target });
-                ctx.timeline.push({ action: "interceptor handling: before", content: stats.interceptors.before });
-                for (const func of stats.interceptors.before) {
-                    await func(ctx, { throwError });
-                }
-                ctx.timeline.push({ action: "task started", content: ctx.target });
-                ctx.result = await task(ctx);
+                addEachTimeline("TASK_ACQUIRED", {
+                    target: ctx.target
+                });
+                await handleEachInterceptor("before", (interceptorType, func) => ({
+                    throwError: (error) => {
+                        addEachTimeline("INTERCEPTOR_API_CALLED", {
+                            interceptorType,
+                            interceptor: func,
+                            method: "throwError",
+                            args: [error]
+                        });
+                        throw error;
+                    }
+                }));
+                addEachTimeline("TASK_STARTED", {
+                    target: ctx.target
+                });
+                const startTime = performance.now();
+                ctx.result = await ctx.target(ctx);
+                const endTime = performance.now();
+                addEachTimeline("TASK_ENDED", {
+                    target: ctx.target,
+                    took: endTime - startTime
+                });
+                await handleEachInterceptor("after", (interceptorType, func) => ({
+                    setResult: (unknown) => {
+                        addEachTimeline("INTERCEPTOR_API_CALLED", {
+                            interceptorType,
+                            interceptor: func,
+                            method: "setResult",
+                            args: [unknown]
+                        });
+                        ctx.result = unknown;
+                        return unknown;
+                    },
+                    throwError: (error) => {
+                        addEachTimeline("INTERCEPTOR_API_CALLED", {
+                            interceptorType,
+                            interceptor: func,
+                            method: "throwError",
+                            args: [error]
+                        });
+                        throw error;
+                    }
+                }));
             }
             finally {
-                ctx.timeline.push({ action: "task ended", content: ctx.target });
-                const setResult = (unk) => {
-                    ctx.timeline.push({ action: "setResult called", content: unk });
-                    ctx.result = unk;
-                    return unk;
-                };
-                ctx.timeline.push({ action: "interceptor handling: after", content: stats.interceptors.after });
-                for (const func of stats.interceptors.after) {
-                    await func(ctx, { setResult, throwError });
-                }
                 semaphore.release();
-                ctx.timeline.push({ action: "task released", content: ctx.target });
-                return ctx.result;
+                addEachTimeline("TASK_RELEASED", {
+                    target: ctx.target
+                });
             }
         }
         catch (error) {
             ctx.error = error;
-            let overwritten = false;
-            const setResult = (unk) => {
-                ctx.timeline.push({ action: "setResult called", content: unk });
-                ctx.result = unk;
-                overwritten = true;
-                return unk;
-            };
-            ctx.timeline.push({ action: "interceptor handling: onError", content: stats.interceptors.onError });
-            for (const func of stats.interceptors.onError) {
-                await func(ctx, { setResult, throwError });
-            }
-            if (overwritten)
+            addEachTimeline("PROCESS_HANDLING", {
+                type: "TASK_ERROR",
+                data: {
+                    error
+                }
+            });
+            await handleEachInterceptor("onError", (interceptorType, func) => ({
+                setResult: (unknown) => {
+                    addEachTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "setResult",
+                        args: [unknown]
+                    });
+                    ctx.result = unknown;
+                    ctx.flag.overwritten = true;
+                    return unknown;
+                },
+                throwError: (error) => {
+                    addEachTimeline("INTERCEPTOR_API_CALLED", {
+                        interceptorType,
+                        interceptor: func,
+                        method: "throwError",
+                        args: [error]
+                    });
+                    throw error;
+                },
+            }));
+            if (ctx.flag.overwritten)
                 return ctx.result;
             throw error;
         }
+        return ctx.result;
     }
     async request(config, timeline = []) {
         const stats = this._mergeConfig(this._config, config);
@@ -1051,29 +1563,37 @@ class VigorAll extends VigorStatus {
             result: VigorDefault,
             timeline,
             stats,
-            queue: new Set()
+            queue: new Set(),
+            active: 0
         };
+        const addTimeline = this._createTimelineHandler(ctx.timeline);
+        const handleInterceptor = this._createInterceptorHandler(ctx, addTimeline);
+        addTimeline("PROCESS_HANDLING", {
+            type: "REQUEST_START",
+            data: {}
+        });
         if (stats.target.length === 0)
             throw new VigorAllError("EMPTY_TARGET", {
                 method: "request",
                 data: {}
             });
         const waitQueue = [];
+        const acquire = () => {
+            if (ctx.active < stats.settings.concurrency) {
+                ctx.active++;
+                return Promise.resolve();
+            }
+            return new Promise((res) => waitQueue.push(() => { ctx.active++; res(); }));
+        };
+        const release = () => {
+            ctx.active--;
+            if (waitQueue.length > 0) {
+                const next = waitQueue.shift();
+                if (next)
+                    next();
+            }
+        };
         for (const task of stats.target) {
-            const acquire = () => {
-                if (ctx.queue.size < stats.settings.concurrency) {
-                    return Promise.resolve();
-                }
-                return new Promise((res) => waitQueue.push(res));
-            };
-            const release = () => {
-                if (waitQueue.length > 0) {
-                    const next = waitQueue.shift();
-                    if (next)
-                        next();
-                }
-            };
-            acquire();
             let promise;
             promise = this.runTask(task, { stats, root: ctx }, { acquire, release }).then(res => {
                 ctx.queue.delete(promise);
@@ -1081,23 +1601,40 @@ class VigorAll extends VigorStatus {
             }).catch(err => ({ success: false, value: err }));
             ctx.queue.add(promise);
         }
+        addTimeline("QUEUE_REQUEST_STARTED", {
+            queue: ctx.queue
+        });
+        const startTime = performance.now();
         const raw = await Promise.all(ctx.queue);
+        const endTime = performance.now();
+        addTimeline("QUEUE_REQUEST_ENDED", {
+            queue: ctx.queue,
+            took: endTime - startTime
+        });
         ctx.result = stats.settings.onlySuccess
             ? raw.filter(r => r.success).map(r => r.value)
             : raw.map(r => r.value);
-        const setResult = (unk) => {
-            ctx.timeline.push({ action: "setResult called", content: unk });
-            ctx.result = unk;
-            return unk;
-        };
-        const throwError = (err) => {
-            ctx.timeline.push({ action: "throwError called", content: err });
-            throw err;
-        };
-        ctx.timeline.push({ action: "interceptor handling: result", content: stats.interceptors.result });
-        for (const func of stats.interceptors.result) {
-            await func(ctx, { setResult, throwError });
-        }
+        await handleInterceptor("result", (interceptorType, func) => ({
+            setResult: (unknown) => {
+                addTimeline("INTERCEPTOR_API_CALLED", {
+                    interceptorType,
+                    interceptor: func,
+                    method: "setResult",
+                    args: [unknown]
+                });
+                ctx.result = unknown;
+                return unknown;
+            },
+            throwError: (error) => {
+                addTimeline("INTERCEPTOR_API_CALLED", {
+                    interceptorType,
+                    interceptor: func,
+                    method: "throwError",
+                    args: [error]
+                });
+                throw error;
+            },
+        }));
         return ctx.result;
     }
 }
