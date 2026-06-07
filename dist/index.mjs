@@ -1736,4 +1736,4 @@ const vigor = {
     }
 };
 
-export { VigorEntry, vigor as default, vigor };
+export { VigorAllError, VigorEntry, VigorFetchError, VigorParseError, VigorRetryError, vigor as default, vigor };

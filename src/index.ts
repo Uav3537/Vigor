@@ -9,7 +9,7 @@ const VigorErrorMessageFuncs = {
     INVALID_BODY: ({expected, received}: {expected: Array<string>, received: unknown}) => `Invalid Body: ${typeof received} (expected: ${expected.join(', ')})`,
     FETCH_FAILED: ({status, response, url, headers, body, statusText}: {status: number, response: Response, url: string, headers: unknown, body: unknown, statusText: string}) => `Fetch Failed: ${status}`,
     EMPTY_TARGET: ({}) => `Empty Body`
-}
+} as const
 
 type VigorErrorCodes = keyof typeof VigorErrorMessageFuncs
 
@@ -2461,6 +2461,8 @@ const VigorEntry = {
     }
 }
 
+type VigorEntryType = typeof VigorEntry
+
 const vigor = {
     use: async<C, R>(
         func: (entry: typeof VigorEntry, config: C) => R | Promise<R>, 
@@ -2502,3 +2504,37 @@ const vigor = {
 
 export default vigor
 export { vigor, VigorEntry }
+
+export type {
+    VigorFetchContext,
+    VigorAllContext,
+    VigorAllEachContext,
+    VigorRetryContext,
+    VigorParseContext,
+    VigorFetchInterceptorsApi,
+    VigorAllInterceptorsApi,
+    VigorAllEachInterceptorsApi,
+    VigorRetryInterceptorsApi,
+    VigorParseInterceptorsApi,
+    VigorFetchConfig,
+    VigorAllConfig,
+    VigorRetryConfig,
+    VigorParseConfig,
+    VigorFetchInterceptorsFunctions,
+    VigorAllInterceptorsFunctions,
+    VigorAllEachInterceptorsFunctions,
+    VigorRetryInterceptorsFunctions,
+    VigorParseInterceptorsFunctions,
+    VigorFetchSettingsConfig,
+    VigorAllSettingsConfig,
+    VigorRetrySettingsConfig,
+    VigorParseSettingsConfig,
+}
+
+export {
+    VigorFetchError,
+    VigorRetryError,
+    VigorParseError,
+    VigorAllError,
+    VigorEntryType,
+}

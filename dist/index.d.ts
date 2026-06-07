@@ -1,38 +1,38 @@
 declare const VigorErrorMessageFuncs: {
-    INVALID_TARGET: ({ expected, received }: {
+    readonly INVALID_TARGET: ({ expected, received }: {
         expected: Array<string>;
         received: unknown;
     }) => string;
-    EXHAUSTED: ({ maxAttempts }: {
+    readonly EXHAUSTED: ({ maxAttempts }: {
         maxAttempts: number;
     }) => string;
-    TIMED_OUT: ({ limit, attempt }: {
+    readonly TIMED_OUT: ({ limit, attempt }: {
         limit: number;
         attempt: number;
     }) => string;
-    INVALID_CONTENT_TYPE: ({ expected, received, response }: {
+    readonly INVALID_CONTENT_TYPE: ({ expected, received, response }: {
         expected: Array<string>;
         received: unknown;
         response: Response;
     }) => string;
-    PARSER_NOT_FOUND: ({ expected, received, response }: {
+    readonly PARSER_NOT_FOUND: ({ expected, received, response }: {
         expected: Array<string>;
         received: unknown;
         response: Response;
     }) => string;
-    PARSER_ALL_FAILED: ({ tried, response }: {
+    readonly PARSER_ALL_FAILED: ({ tried, response }: {
         tried: Array<unknown>;
         response: Response;
     }) => string;
-    INVALID_PROTOCOL: ({ expected, received }: {
+    readonly INVALID_PROTOCOL: ({ expected, received }: {
         expected: Array<string>;
         received: unknown;
     }) => string;
-    INVALID_BODY: ({ expected, received }: {
+    readonly INVALID_BODY: ({ expected, received }: {
         expected: Array<string>;
         received: unknown;
     }) => string;
-    FETCH_FAILED: ({ status, response, url, headers, body, statusText }: {
+    readonly FETCH_FAILED: ({ status, response, url, headers, body, statusText }: {
         status: number;
         response: Response;
         url: string;
@@ -40,7 +40,7 @@ declare const VigorErrorMessageFuncs: {
         body: unknown;
         statusText: string;
     }) => string;
-    EMPTY_TARGET: ({}: {}) => string;
+    readonly EMPTY_TARGET: ({}: {}) => string;
 };
 type VigorErrorCodes = keyof typeof VigorErrorMessageFuncs;
 type VigorErrorDatas<C extends VigorErrorCodes> = Parameters<typeof VigorErrorMessageFuncs[C]> extends [infer A] ? A : undefined;
@@ -778,6 +778,7 @@ declare const VigorEntry: {
         error: typeof VigorAllError;
     };
 };
+type VigorEntryType = typeof VigorEntry;
 declare const vigor: {
     use: <C, R>(func: (entry: typeof VigorEntry, config: C) => R | Promise<R>, config: C) => Promise<R>;
     fetch: (str: Parameters<VigorFetch["origin"]>[0]) => VigorFetch;
@@ -804,4 +805,5 @@ declare const vigor: {
     };
 };
 
-export { VigorEntry, vigor as default, vigor };
+export { VigorAllError, VigorEntry, VigorFetchError, VigorParseError, VigorRetryError, vigor as default, vigor };
+export type { VigorAllConfig, VigorAllContext, VigorAllEachContext, VigorAllEachInterceptorsApi, VigorAllEachInterceptorsFunctions, VigorAllInterceptorsApi, VigorAllInterceptorsFunctions, VigorAllSettingsConfig, VigorEntryType, VigorFetchConfig, VigorFetchContext, VigorFetchInterceptorsApi, VigorFetchInterceptorsFunctions, VigorFetchSettingsConfig, VigorParseConfig, VigorParseContext, VigorParseInterceptorsApi, VigorParseInterceptorsFunctions, VigorParseSettingsConfig, VigorRetryConfig, VigorRetryContext, VigorRetryInterceptorsApi, VigorRetryInterceptorsFunctions, VigorRetrySettingsConfig };

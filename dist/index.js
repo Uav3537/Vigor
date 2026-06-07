@@ -1740,6 +1740,10 @@ const vigor = {
     }
 };
 
+exports.VigorAllError = VigorAllError;
 exports.VigorEntry = VigorEntry;
+exports.VigorFetchError = VigorFetchError;
+exports.VigorParseError = VigorParseError;
+exports.VigorRetryError = VigorRetryError;
 exports.default = vigor;
 exports.vigor = vigor;
