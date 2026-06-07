@@ -1104,7 +1104,7 @@ class VigorFetch extends VigorStatus {
         });
         try {
             try {
-                new URL(stats.origin[0]);
+                new URL(stats.origin);
             }
             catch {
                 throw new VigorFetchError("INVALID_PROTOCOL", {
